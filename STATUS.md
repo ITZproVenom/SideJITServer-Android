@@ -44,7 +44,7 @@ and starts its own background service. That is all it does today.
 
 | Item | State |
 | --- | --- |
-| Interface and address enumeration | NOT IMPLEMENTED |
+| Interface and address enumeration | IMPLEMENTED + TESTED (unit tests) |
 | Network change handling and re-registration | NOT IMPLEMENTED |
 | Multicast lock | NOT IMPLEMENTED |
 
@@ -52,8 +52,10 @@ and starts its own background service. That is all it does today.
 
 | Item | State |
 | --- | --- |
-| DNS record encode/decode | NOT IMPLEMENTED |
-| `_remotepairing-pairable-host._tcp` advertisement | NOT IMPLEMENTED |
+| DNS record encode/decode, with name compression | IMPLEMENTED + TESTED (unit tests) |
+| Question to answer logic, known-answer suppression | IMPLEMENTED + TESTED (unit tests) |
+| Multicast responder sockets (IPv4 and IPv6) | IMPLEMENTED + UNTESTED (no test harness sends real multicast yet) |
+| `_remotepairing-pairable-host._tcp` advertisement | PARTIAL (the responder can publish it; nothing calls it yet) |
 | Service discovery for SideStore / LiveContainer | NOT IMPLEMENTED |
 
 ## Cryptography
