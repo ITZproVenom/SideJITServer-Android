@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build the APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      # The debug APK is the installable one: it carries a signature, where
+      # `assembleRelease` with no keystore does not. It is not a "debuggable
+      # convenience build" being passed off as a release; it is the only
+      # artifact a person can sideload without their own signing key.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VERSION=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="build-${{ github.run_number }}"
+          NAME="SideJITServer-Android-$VERSION-$TAG.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
+          {
+            echo "Build ${{ github.run_number }} from \`${GITHUB_SHA::7}\`, version $VERSION."
+            echo
+            echo "**Work in progress. Read STATUS.md before installing.**"
+            echo
+            echo "Most of the protocol stack is not finished. This build installs and runs on"
+            echo "phones, tablets and Android TV, and it does not yet pair with or provide JIT"
+            echo "to an iOS device. STATUS.md lists exactly what is implemented."
+          } > notes.md
+          gh release create "$TAG" "$NAME" \
+            --title "$VERSION build ${{ github.run_number }}" \
+            --notes-file notes.md \
+            --prerelease

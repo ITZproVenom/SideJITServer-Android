@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SideJIT Server</string>
+    <string name="notification_channel_name">Server</string>
+    <string name="notification_channel_description">Shows that the JIT server is running.</string>
+</resources>

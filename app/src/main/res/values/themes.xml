@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.SideJitServer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF0B0B0F</item>
+        <item name="android:navigationBarColor">#FF0B0B0F</item>
+        <item name="android:windowBackground">#FF0B0B0F</item>
+    </style>
+</resources>
