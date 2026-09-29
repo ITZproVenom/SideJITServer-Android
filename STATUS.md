@@ -60,10 +60,14 @@ and starts its own background service. That is all it does today.
 
 | Item | State |
 | --- | --- |
-| X25519, Ed25519, ChaCha20-Poly1305, HKDF, HMAC, SHA-512 | NOT IMPLEMENTED |
-| SRP-6a (3072-bit, SHA-512) accessory side | NOT IMPLEMENTED |
-| OPACK encode/decode | NOT IMPLEMENTED |
-| TLV8 encode/decode | NOT IMPLEMENTED |
+| SHA-256 / SHA-512, HMAC, HKDF | IMPLEMENTED + TESTED (RFC 4231 and RFC 5869 vectors) |
+| X25519 | IMPLEMENTED + TESTED (RFC 7748 section 6.1 vectors) |
+| Ed25519 | IMPLEMENTED + TESTED (RFC 8032 section 7.1 vectors) |
+| ChaCha20-Poly1305 | IMPLEMENTED + TESTED (RFC 8439 section 2.8.2 vector) |
+| SRP-6a (3072-bit, SHA-512) accessory side | IMPLEMENTED + TESTED (round trip against an independent test client; never run against an iPhone) |
+| OPACK encode/decode | IMPLEMENTED + TESTED (unit tests, including back references) |
+| TLV8 encode/decode | IMPLEMENTED + TESTED (unit tests, including 255-byte fragmentation) |
+| Byte readers and writers | IMPLEMENTED + TESTED (unit tests) |
 
 ## Pairing
 
