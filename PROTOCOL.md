@@ -89,3 +89,83 @@ attach, let the kernel grant JIT, detach
   ship.
 - The TXT record keys the iOS device requires in the pairable-host
   advertisement for it to be offered to the user at all.
+
+## Device-initiated remote pairing, as implemented here
+
+This is the part that makes a server with no cable and no computer possible, so
+it is worth writing down precisely.
+
+Older remote pairing has the *device* advertise `_remotepairing._tcp` and the
+host connect to it. That flow needs a pairing record to already exist, which is
+exactly what a fresh Android install does not have, and it is why every other
+tool asks for a pairing file produced on a Mac, a PC or with a cable.
+
+iOS 26 and later can also go the other way. The host advertises
+
+```
+_remotepairing-pairable-host._tcp.local.
+```
+
+and the phone connects to it. The host then plays the *accessory*: it chooses a
+six digit setup code, displays it, and acts as the SRP server while the person
+types the code into the phone.
+
+### The advertisement
+
+- Instance name: the host identifier, a UUID.
+- Host name: `idevice-<first eight characters of the identifier, lower case>.local.`
+- TXT entries: `name`, `identifier`, `authTag`, `model`, `flags=1`, `ver=26`,
+  `minVer=17`.
+- `authTag` is `SipHash-2-4` keyed with the host's 16 byte `altIRK` over the
+  identifier, taken as eight little endian bytes, reversed, first six bytes,
+  base64 encoded. A device that has paired before uses it to recognise the host.
+
+### The control channel
+
+Frames are the literal ASCII `RPPairing`, a big endian 16 bit length, then a
+JSON envelope:
+
+```json
+{"message":{"plain":{"_0": ...}},"originatedBy":"device","sequenceNumber":0}
+```
+
+`originatedBy` is `device` on the accessory side and `host` on the initiating
+side; the responder here is the accessory, so it sends `device`. Once a session
+key exists the envelope becomes `{"streamEncrypted":{"_0":"<base64>"}}`.
+
+### The conversation
+
+1. The phone sends `request._0.handshake._0`. If `hostOptions.attemptPairVerify`
+   is set it wants to reuse an existing pairing, which this side cannot do yet.
+2. The host replies with its wire protocol version, its device options and a
+   `peerDeviceInfo` dictionary.
+3. Pair setup runs as TLV8 inside
+   `event._0.pairingData._0.data`, base64 encoded, `kind` `setupManualPairing`.
+   States 1 to 6 are the familiar accessory pair setup:
+   M1 start, M2 salt and `B`, M3 `A` and the device proof, M4 the host proof,
+   M5 the device identity sealed under `PS-Msg05`, M6 the host identity sealed
+   under `PS-Msg06`.
+
+SRP-6a uses the RFC 5054 3072 bit group with SHA-512 and the user name
+`Pair-Setup`. Two details do not match the letter of the RFC and must be
+followed exactly or the proofs will not agree:
+
+- `u = H(A | B)` over the *unpadded* big endian values,
+- `M1 = H(H(N) xor H(g) | H(I) | s | A | B | K)` with `A` and `B` *padded* to
+  384 bytes.
+
+`B` is also expected to be exactly 384 bytes, so the private exponent is
+regenerated until it is.
+
+Keys are derived from the SRP session key with HKDF-SHA512:
+
+| Purpose | Salt | Info |
+| --- | --- | --- |
+| M5 and M6 encryption | `Pair-Setup-Encrypt-Salt` | `Pair-Setup-Encrypt-Info` |
+| Host signature input | `Pair-Setup-Accessory-Sign-Salt` | `Pair-Setup-Accessory-Sign-Info` |
+| Device signature input | `Pair-Setup-Controller-Sign-Salt` | `Pair-Setup-Controller-Sign-Info` |
+
+The host signs `accessoryX | identifier | longTermPublicKey` with Ed25519 and
+sends that, its identifier and its public key in M6, along with an OPACK
+dictionary holding `altIRK`, `accountID`, `remotepairing_udid`, `model` and
+`name`. The device sends the same shape in M5.

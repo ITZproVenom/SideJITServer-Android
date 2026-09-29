@@ -23,6 +23,8 @@ dependencies {
     api(project(":core:logging"))
     api(project(":core:net"))
     api(project(":core:mdns"))
+    api(project(":core:crypto"))
+    api(project(":pairing"))
     api(project(":server"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.service)

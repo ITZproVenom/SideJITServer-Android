@@ -15,9 +15,15 @@ Legend:
 
 ## Current overall state
 
-**The application does not yet pair with an iOS device and does not yet
-provide JIT.** It builds, installs and runs on phones, tablets and Android TV,
-and starts its own background service. That is all it does today.
+**The application can now run the full device-initiated pairing conversation,
+but it has never been run against a real iPhone or iPad, and it still does not
+provide JIT.** On start it generates a stable host identity, listens for a
+device-initiated pairing on a TCP port, advertises
+`_remotepairing-pairable-host._tcp` over multicast DNS, shows a six digit setup
+code on screen, completes SRP pair setup and stores the resulting pairing
+encrypted on the device. Everything above that layer - the encrypted tunnel,
+RSD, RemoteXPC, the developer services, JIT itself and the local HTTP API -
+does not exist yet.
 
 ## Build and packaging
 
@@ -45,8 +51,8 @@ and starts its own background service. That is all it does today.
 | Item | State |
 | --- | --- |
 | Interface and address enumeration | IMPLEMENTED + TESTED (unit tests) |
-| Network change handling and re-registration | NOT IMPLEMENTED |
-| Multicast lock | NOT IMPLEMENTED |
+| Network change handling and re-registration | IMPLEMENTED + UNTESTED on hardware |
+| Multicast lock and partial wake lock | IMPLEMENTED + UNTESTED on hardware |
 
 ## mDNS
 
@@ -55,13 +61,15 @@ and starts its own background service. That is all it does today.
 | DNS record encode/decode, with name compression | IMPLEMENTED + TESTED (unit tests) |
 | Question to answer logic, known-answer suppression | IMPLEMENTED + TESTED (unit tests) |
 | Multicast responder sockets (IPv4 and IPv6) | IMPLEMENTED + UNTESTED (no test harness sends real multicast yet) |
-| `_remotepairing-pairable-host._tcp` advertisement | PARTIAL (the responder can publish it; nothing calls it yet) |
+| `_remotepairing-pairable-host._tcp` advertisement | IMPLEMENTED + UNTESTED on hardware (published on the real pairing port, with `authTag`) |
 | Service discovery for SideStore / LiveContainer | NOT IMPLEMENTED |
 
 ## Cryptography
 
 | Item | State |
 | --- | --- |
+| SipHash-2-4 and the mDNS `authTag` | IMPLEMENTED + TESTED (paper vectors and a captured advertisement) |
+| JSON reader and writer | IMPLEMENTED + TESTED (unit tests) |
 | SHA-256 / SHA-512, HMAC, HKDF | IMPLEMENTED + TESTED (RFC 4231 and RFC 5869 vectors) |
 | X25519 | IMPLEMENTED + TESTED (RFC 7748 section 6.1 vectors) |
 | Ed25519 | IMPLEMENTED + TESTED (RFC 8032 section 7.1 vectors) |
@@ -75,10 +83,13 @@ and starts its own background service. That is all it does today.
 
 | Item | State |
 | --- | --- |
-| RPPairing framing and state machine | NOT IMPLEMENTED |
-| Pair setup (device-initiated, host as accessory) | NOT IMPLEMENTED |
-| Pair verify | NOT IMPLEMENTED |
-| Keystore-backed pairing storage | NOT IMPLEMENTED |
+| `RPPairing` framing and JSON envelopes | IMPLEMENTED + TESTED (unit tests) |
+| Pair setup (device-initiated, host as accessory) | IMPLEMENTED + TESTED against a stand-in device over a real socket; **never against an iPhone** |
+| Setup code shown on screen, wrong code rejected | IMPLEMENTED + TESTED (unit tests) |
+| Host identity, stable across restarts | IMPLEMENTED + UNTESTED on hardware |
+| Keystore-backed encrypted pairing storage | IMPLEMENTED + UNTESTED on hardware |
+| Pair verify (reconnecting to a device already paired) | NOT IMPLEMENTED |
+| `_remotepairing._tcp` browsing for a paired device | NOT IMPLEMENTED |
 
 ## CoreDevice and above
 
