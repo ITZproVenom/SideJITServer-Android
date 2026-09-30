@@ -22,8 +22,10 @@ device-initiated pairing on a TCP port, advertises
 `_remotepairing-pairable-host._tcp` over multicast DNS, shows a six digit setup
 code on screen, completes SRP pair setup and stores the resulting pairing
 encrypted on the device. Everything above that layer - the encrypted tunnel,
-RSD, RemoteXPC, the developer services, JIT itself and the local HTTP API -
-does not exist yet.
+RSD, HTTP/2, DVT, the debugserver connection and JIT itself - does not exist
+yet. The GDB attach/detach sequence, JIT orchestration, a RemoteXPC codec and a
+local HTTP API exist and are unit tested, but nothing connects them to a
+device, so a JIT request fails and names the missing stage.
 
 ## Build and packaging
 
