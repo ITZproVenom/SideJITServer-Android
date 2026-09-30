@@ -15,7 +15,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * GET /  → status JSON
  * GET /version → version string
  * POST /launch?bundleId=… → attempts JIT (fails until live device path works)
- * GET /reattach/:pid → not yet wired to a live session
  */
 class LocalHttpApi(
     private val port: Int = 8080,
@@ -100,7 +99,11 @@ class LocalHttpApi(
                         )
                 }
             }
-            else -> Triple("404 Not Found", "{"ok":false,"error":"not found"}", "application/json")
+            else -> Triple(
+                "404 Not Found",
+                """{"ok":false,"error":"not found"}""",
+                "application/json",
+            )
         }
     }
 
