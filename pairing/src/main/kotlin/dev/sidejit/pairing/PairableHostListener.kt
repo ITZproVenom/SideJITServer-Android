@@ -27,8 +27,11 @@ class PairableHostListener(
     /** Called with the code to show, and with null when the attempt is over. */
     var onSetupCode: (String?) -> Unit = {}
 
-    /** Called when a device finishes pairing. */
+    /** Called when a device finishes pairing (setup or verify). */
     var onPaired: (PairingRecord) -> Unit = {}
+
+    /** Called when verify succeeds (session keys available). */
+    var onVerified: (VerifiedSession) -> Unit = {}
 
     /** Called when an attempt fails, with a short reason suitable for a status screen. */
     var onFailure: (String) -> Unit = {}
@@ -100,12 +103,23 @@ class PairableHostListener(
                 BufferedInputStream(socket.getInputStream()),
                 BufferedOutputStream(socket.getOutputStream()),
             )
-            val host = PairableHost(identity, stream, pinless)
+            val host = PairableHost(
+                identity = identity,
+                stream = stream,
+                store = store,
+                pinless = pinless,
+            )
             host.onSetupCode = { code -> onSetupCode(code) }
             try {
-                val record = host.accept()
-                store.save(record)
-                onPaired(record)
+                when (val result = host.accept()) {
+                    is AcceptResult.Setup -> {
+                        onPaired(result.record)
+                    }
+                    is AcceptResult.Verified -> {
+                        onVerified(result.session)
+                        onPaired(result.session.record)
+                    }
+                }
             } catch (failure: Exception) {
                 Log.w(LogTag.PAIRING, "pairing failed: ${failure.describe()}")
                 onFailure(failure.message ?: failure.javaClass.simpleName)
