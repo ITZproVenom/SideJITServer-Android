@@ -53,7 +53,7 @@ object CoreDeviceTunnel {
         listenerPort: Int,
         psk: ByteArray,
     ): OpenedTunnel {
-        Log.i(LogTag.COREDEVICE, "TLS-PSK connect $host:$listenerPort")
+        Log.i(LogTag.TUNNEL, "TLS-PSK connect $host:$listenerPort")
         val tls = TlsPskClient(psk).connect(host, listenerPort)
         try {
             CdTunnel.writeJson(tls.output, ClientHandshake.request())
@@ -61,7 +61,7 @@ object CoreDeviceTunnel {
             val json = JsonValue.parse(String(responsePacket.body, Charsets.UTF_8))
             val params = TunnelParameters.fromHandshakeResponse(json)
             Log.i(
-                LogTag.COREDEVICE,
+                LogTag.TUNNEL,
                 "tunnel up client=${params.clientAddress} server=${params.serverAddress} rsd=${params.serverRsdPort}",
             )
             return OpenedTunnel(tls, params, tls.input, tls.output)
