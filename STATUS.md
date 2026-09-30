@@ -24,7 +24,7 @@ step that could not complete without a live device.
 | HTTP/2 frame codec (RemoteXPC transport) | IMPLEMENTED |
 | NSKeyedArchive encoder (bplist00, DVT method calls) | IMPLEMENTED |
 | ProcessControl launch archive + JSON | IMPLEMENTED |
-| DvtClient (preface + archive send) | IMPLEMENTED |
+| DvtClient (preface + archive send + best-effort PID scrape) | IMPLEMENTED |
 | GDB remote JIT sequence | IMPLEMENTED |
 | Local HTTP API (/status, /launch) | IMPLEMENTED |
 | JIT orchestration | IMPLEMENTED (fails without live device) |
@@ -34,7 +34,7 @@ step that could not complete without a live device.
 - Pairing against real iOS 27+
 - createListener + TLS-PSK to a real listener port
 - Userspace TCP across a real tunnel
-- Live RSD / DVT reply parsing (PID extraction)
+- Live RSD / DVT reply parsing (heuristic PID scrape only; unvalidated)
 - Actual JIT grant via debugproxy
 
 ## Physical validation

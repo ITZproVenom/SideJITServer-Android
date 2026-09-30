@@ -38,7 +38,7 @@ object Rsd {
     fun parseHandshake(json: JsonValue): Handshake {
         val type = json.path("MessageType")?.asText
         if (type != null && type != "Handshake") {
-            throw CdTunnelException("expected RSD Handshake, got $type")
+            throw RsdException("expected RSD Handshake, got $type")
         }
         val version = json.path("MessagingProtocolVersion")?.asLong?.toInt() ?: 0
         val services = mutableListOf<Service>()
