@@ -22,7 +22,7 @@ import java.util.Base64
  * The accessory half of remote pairing, for the case where the iOS device initiates.
  *
  * Supports pair-setup (new pairing with a six-digit code) and, when a [PairingStore]
- * is supplied and the device asks for it, pair-verify against a stored record.
+ * holds at least one record and the device asks for it, pair-verify.
  */
 class PairableHost(
     private val identity: HostIdentity,
@@ -34,10 +34,6 @@ class PairableHost(
 ) {
     var onSetupCode: (String) -> Unit = {}
 
-    /**
-     * Accept one connection. Returns either a fresh [PairingRecord] from setup or a
-     * [VerifiedSession] from verify. The caller persists setup results via [store].
-     */
     fun accept(): AcceptResult {
         val attemptVerify = handshake()
         return if (attemptVerify) {
@@ -51,7 +47,6 @@ class PairableHost(
         }
     }
 
-    /** Backwards-compatible entry that only performs setup. */
     fun acceptSetup(): PairingRecord {
         handshake(forceSetup = true)
         return pairSetup().also { store?.save(it) }
@@ -61,16 +56,17 @@ class PairableHost(
         val request = stream.receivePlain()
         val handshake = request.path("request", "_0", "handshake", "_0")
             ?: throw RpProtocolException("the first message was not a handshake request")
-        val attemptVerify = !forceSetup &&
+        val wantsVerify = !forceSetup &&
             handshake.path("hostOptions", "attemptPairVerify")?.asBool == true
 
-        if (attemptVerify && store == null) {
+        val canVerify = wantsVerify && store != null && store.all().isNotEmpty()
+        if (wantsVerify && !canVerify) {
             throw RpProtocolException("the device asked to verify an existing pairing")
         }
 
         Log.i(
             LogTag.PAIRING,
-            if (attemptVerify) "handshake: device wants pair-verify"
+            if (canVerify) "handshake: device wants pair-verify"
             else "handshake from a device, replying as a pairable host",
         )
         stream.sendPlain(
@@ -103,7 +99,7 @@ class PairableHost(
                 ),
             ),
         )
-        return attemptVerify
+        return canVerify
     }
 
     private fun pairSetup(): PairingRecord {
