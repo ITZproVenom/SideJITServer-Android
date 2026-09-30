@@ -33,7 +33,7 @@ object Rsd {
         val version = json.path("MessagingProtocolVersion")?.asLong?.toInt() ?: 0
         val servicesNode = json.path("Services")
         val services = mutableListOf<Service>()
-        if (servicesNode is JsonValue.Object) {
+        if (servicesNode is JsonValue.Obj) {
             for ((name, value) in servicesNode.entries) {
                 val port = value.path("Port")?.asText?.toIntOrNull()
                     ?: value.path("Port")?.asLong?.toInt()
@@ -48,7 +48,7 @@ object Rsd {
         }
         val props = mutableMapOf<String, String>()
         val propsNode = json.path("Properties")
-        if (propsNode is JsonValue.Object) {
+        if (propsNode is JsonValue.Obj) {
             for ((k, v) in propsNode.entries) {
                 v.asText?.let { props[k] = it }
                     ?: v.asLong?.let { props[k] = it.toString() }
