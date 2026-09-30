@@ -7,6 +7,13 @@ import dev.sidejit.core.logging.describe
 import dev.sidejit.core.mdns.MdnsResponder
 import dev.sidejit.core.mdns.ServiceRegistration
 import dev.sidejit.core.net.Interfaces
+import dev.sidejit.core.serialization.JsonValue
+import dev.sidejit.core.serialization.jsonArray
+import dev.sidejit.core.serialization.jsonObject
+import dev.sidejit.jit.JitOrchestrator
+import dev.sidejit.jit.UnavailableConnector
+import dev.sidejit.jit.UnavailableProcessResolver
+import dev.sidejit.server.LocalApi
 import dev.sidejit.pairing.HostIdentity
 import dev.sidejit.pairing.PairableHostListener
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +44,7 @@ class ServerRuntime private constructor(private val context: Context) {
     private var identity: HostIdentity? = null
     private var listener: PairableHostListener? = null
     private var responder: MdnsResponder? = null
+    private var api: LocalApi? = null
     private var lease: MulticastLease? = null
     private var watcher: NetworkWatcher? = null
     private var lastSignature: String = ""
@@ -95,8 +103,42 @@ class ServerRuntime private constructor(private val context: Context) {
         lease = MulticastLease(context).apply { acquire() }
         publishAddresses()
         startResponder(host, port)
+        startApi()
 
         watcher = NetworkWatcher(context) { onNetworkChanged(host, port) }.also { it.start() }
+    }
+
+    private fun startApi() {
+        // The orchestrator is real; its process resolver and tunnel connector are
+        // the "unavailable" ones until the DVT and tunnel layers exist, so every
+        // JIT request fails with the stage that is missing.
+        val server = LocalApi(
+            orchestrator = JitOrchestrator(UnavailableProcessResolver, UnavailableConnector),
+            statusProvider = { statusJson() },
+        )
+        try {
+            val apiPort = server.start()
+            api = server
+            _state.update { it.copy(api = Stage("Local HTTP API", StageStatus.READY, "port $apiPort")) }
+        } catch (failure: Exception) {
+            Log.e(LogTag.SERVER, "the local API could not start", failure)
+            _state.update { it.copy(api = Stage("Local HTTP API", StageStatus.FAILED, failure.describe())) }
+        }
+    }
+
+    private fun statusJson(): JsonValue {
+        val current = _state.value
+        return jsonObject(
+            "stages" to jsonArray(
+                *current.stages.map {
+                    jsonObject(
+                        "name" to JsonValue.of(it.name),
+                        "status" to JsonValue.of(it.status.name),
+                        "detail" to JsonValue.of(it.detail),
+                    )
+                }.toTypedArray(),
+            ),
+        )
     }
 
     private fun startResponder(host: HostIdentity, port: Int) {
@@ -162,6 +204,8 @@ class ServerRuntime private constructor(private val context: Context) {
         watcher = null
         runCatching { responder?.stop() }
         responder = null
+        api?.stop()
+        api = null
         listener?.stop()
         listener = null
         lease?.release()

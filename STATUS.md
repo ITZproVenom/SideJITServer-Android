@@ -98,12 +98,15 @@ does not exist yet.
 | TLS-PSK tunnel | NOT IMPLEMENTED |
 | Userspace TCP over the tunnel | NOT IMPLEMENTED |
 | RSD | NOT IMPLEMENTED |
-| RemoteXPC / HTTP/2 | NOT IMPLEMENTED |
-| DVT, ProcessControl | NOT IMPLEMENTED |
-| debugproxy | NOT IMPLEMENTED |
-| GDB remote protocol | NOT IMPLEMENTED |
-| JIT | NOT IMPLEMENTED |
-| Local HTTP API | NOT IMPLEMENTED |
+| HTTP/2 framing for RemoteXPC | NOT IMPLEMENTED |
+| DVT / DTX messages, NSKeyedArchive, ProcessControl, process list | NOT IMPLEMENTED |
+| debugproxy service connection (opening the socket through the tunnel) | NOT IMPLEMENTED |
+| JIT end to end | NOT IMPLEMENTED (every layer below the orchestrator is missing) |
+| Local HTTP API (`/health`, `/status`, `/jit/<bundle>`; local-network clients only) | IMPLEMENTED + TESTED (unit tests over a real socket). Route names are this project's own and have not been checked against a SideStore release. `/jit/...` currently always answers 503 with the missing stage |
+| GDB remote protocol (framing, escaping, run-length decoding, no-ack mode) | IMPLEMENTED + TESTED (unit tests against a stub server); never run against debugserver |
+| Attach-then-detach sequence (`vAttach`, `D`) | IMPLEMENTED + TESTED against a stub server only |
+| JIT orchestration (bundle id -> pid -> debugserver -> attach -> detach, per-stage failures) | IMPLEMENTED + TESTED with stand-ins; the real process resolver (DVT) and connector (tunnel) do not exist, so it can only fail, and says where |
+| RemoteXPC message codec (wrapper, body, all object types) | IMPLEMENTED + TESTED (round trips and byte layout); written from public descriptions, never seen against a device |
 
 ## Physical validation
 
