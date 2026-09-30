@@ -41,7 +41,17 @@ android {
     buildFeatures { compose = true }
 
     packaging {
-        resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        resources {
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "META-INF/versions/**/OSGI-INF/MANIFEST.MF",
+                "META-INF/OSGI-INF/MANIFEST.MF",
+            )
+            pickFirsts += setOf(
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+            )
+        }
     }
 
     lint {
