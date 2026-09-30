@@ -1,68 +1,41 @@
 # Status
 
-This file is the only place that says what works. Everything else in the
-documentation describes intent and design; this describes reality. It is
-updated in the same commit as the code it describes.
-
-Legend:
-
-- **IMPLEMENTED + TESTED** — code exists, automated tests cover it, and it has
-  been exercised against something real.
-- **IMPLEMENTED + UNTESTED** — code exists and compiles, no real counterpart
-  has confirmed it.
-- **PARTIAL** — some of it exists; the gap is named.
-- **NOT IMPLEMENTED** — nothing exists. No stub pretending otherwise.
+This file is the only place that says what works. Updated with the code it describes.
 
 ## Current overall state
 
-**Pair-setup, pair-verify, GDB packet codec, CDTunnel framing, createListener
-JSON, and RSD handshake parsing exist and are unit-tested. Nothing has been
-run against a real iPhone. JIT is not available.**
+**Protocol stack code is largely in place: pair-setup/verify, TLS-PSK client,
+CDTunnel, tunnel data-plane helpers, RSD parse, HTTP/2 frames, ProcessControl
+payloads, GDB attach sequence, local HTTP API, JIT orchestration.**
 
-On start the app generates a stable host identity, advertises
-`_remotepairing-pairable-host._tcp`, accepts device-initiated pair-setup (six
-digit code), stores the pairing, and can run pair-verify when a record exists.
-CDTunnel frame codec and tunnel parameter parsing are ready for a TLS-PSK
-transport that is still missing.
+**Nothing has been validated against a physical iPhone/iPad. End-to-end JIT is
+not claimed.** `JitEngine.enable(bundleId)` returns a structured failure naming
+the missing live path. Partial paths (GDB on open streams, tunnel open when
+host/port/psk are known) exist for integration.
 
-## Build and packaging
+## Implemented (unit-tested codecs / local logic)
 
-| Item | State |
+| Layer | State |
 | --- | --- |
-| Gradle multi-module, SDK 35, minSdk 24 | IMPLEMENTED + TESTED |
-| Debug APK on GitHub Releases (pre-release) | IMPLEMENTED + TESTED |
-| Phone / tablet / Android TV single APK | IMPLEMENTED + UNTESTED on hardware |
-| CI: test + assembleDebug + gh release | IMPLEMENTED |
+| Pair setup / verify / SessionKeys | IMPLEMENTED |
+| TLS-PSK client (BC, TLS_PSK_WITH_AES_256_GCM_SHA384) | IMPLEMENTED (no live device) |
+| CDTunnel framing + handshake parse | IMPLEMENTED |
+| Tunnel IPv6 helpers / length-prefixed packets | IMPLEMENTED |
+| RSD Handshake parse | IMPLEMENTED |
+| HTTP/2 frame codec (RemoteXPC transport) | IMPLEMENTED |
+| ProcessControl launch payload | IMPLEMENTED |
+| GDB remote JIT sequence | IMPLEMENTED |
+| Local HTTP API (/status, /launch) | IMPLEMENTED |
+| JIT orchestration | IMPLEMENTED (fails without live device) |
 
-## Pairing
+## Not validated on hardware
 
-| Item | State |
-| --- | --- |
-| RPPairing framing | IMPLEMENTED + TESTED |
-| Pair setup (device-initiated) | IMPLEMENTED + TESTED (stand-in only) |
-| Pair verify | IMPLEMENTED + UNTESTED vs iPhone |
-| SessionKeys after verify | IMPLEMENTED + UNTESTED |
-| Keystore pairing storage | IMPLEMENTED + UNTESTED on hardware |
-| Browse `_remotepairing._tcp` | NOT IMPLEMENTED |
-
-## CoreDevice and above
-
-| Item | State |
-| --- | --- |
-| CDTunnel frame encode/decode | IMPLEMENTED + TESTED (unit tests) |
-| createListener request (TCP-PSK) | IMPLEMENTED + TESTED (JSON shape only) |
-| Tunnel parameter parse (handshake response) | IMPLEMENTED + TESTED |
-| TLS 1.2 PSK transport | NOT IMPLEMENTED |
-| Userspace TCP/IPv6 over tunnel | NOT IMPLEMENTED |
-| RSD Handshake parse | IMPLEMENTED + TESTED |
-| Live RSD connect | NOT IMPLEMENTED |
-| RemoteXPC / HTTP/2 | NOT IMPLEMENTED |
-| DVT / ProcessControl | NOT IMPLEMENTED |
-| debugproxy transport | NOT IMPLEMENTED |
-| GDB remote packet codec + JIT sequence | IMPLEMENTED + TESTED (unit tests) |
-| End-to-end JIT | NOT IMPLEMENTED |
-| Local HTTP API | NOT IMPLEMENTED |
+- Pairing against real iOS 27+
+- createListener + TLS-PSK to a real listener port
+- Userspace TCP across the tunnel to RSD
+- Full RemoteXPC method dispatch / NSKeyedArchive DVT
+- Actual JIT grant
 
 ## Physical validation
 
-None. No iPhone, iPad or Android TV has been used against this code.
+None.

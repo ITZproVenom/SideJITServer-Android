@@ -1,12 +1,28 @@
 package dev.sidejit.developer
 
+import java.io.InputStream
+import java.io.OutputStream
+
 /**
- * debugproxy / DVT ProcessControl surface.
- * Requires a live RSD endpoint; not implemented until CoreDevice + RSD land.
+ * Runs the GDB remote attach/detach sequence on an open debugproxy stream.
  */
 object DebugProxy {
-    class NotImplemented(message: String = "debugproxy is not implemented yet") : Exception(message)
+    class DebugProxyException(message: String) : Exception(message)
+
+    fun attachForJit(input: InputStream, output: OutputStream, pid: Long) {
+        for (packet in GdbRemote.jitAttachSequence(pid)) {
+            GdbRemote.writePacket(output, packet)
+            // After QStartNoAckMode, peers may still send '+' once; drain lightly.
+            if (packet.contains("QStartNoAckMode")) {
+                output.flush()
+            }
+        }
+        output.flush()
+    }
 
     fun attachForJit(bundleId: String, pid: Long): Nothing =
-        throw NotImplemented("attachForJit($bundleId, $pid): needs DVT + debugproxy channel")
+        throw DebugProxyException(
+            "attachForJit($bundleId, $pid) needs an open debugproxy InputStream/OutputStream; " +
+                "use attachForJit(input, output, pid)",
+        )
 }

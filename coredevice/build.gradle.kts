@@ -8,6 +8,10 @@ java {
 
 dependencies {
     api(project(":pairing"))
+    api(project(":core:serialization"))
+    implementation(project(":core:logging"))
+    implementation(libs.bouncycastle.prov)
+    implementation(libs.bouncycastle.tls)
     implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

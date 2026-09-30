@@ -1,48 +1,92 @@
 package dev.sidejit.coredevice
 
+import dev.sidejit.core.logging.Log
+import dev.sidejit.core.logging.LogTag
+import dev.sidejit.core.serialization.JsonValue
 import dev.sidejit.pairing.SessionKeys
 import dev.sidejit.pairing.VerifiedSession
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetAddress
 import java.util.Base64
 
 /**
- * Orchestration entry for the CoreDevice tunnel.
+ * Opens a CoreDevice tunnel after pair-verify:
+ * 1. createListener (TCP) on the control channel — caller supplies the already-verified stream path
+ * 2. TLS-PSK to host:port returned by the device
+ * 3. CDTunnel clientHandshakeRequest / serverHandshakeResponse
  *
- * Implemented so far (unit-tested codecs only):
- * - CDTunnel framing
- * - createListener request shape for TCP-PSK
- * - Handshake parameter parsing
- *
- * Not implemented: TLS 1.2 PSK_WITH_AES_256_GCM_SHA384 transport, userspace IPv6
- * packet path, live dial to a device. [open] still fails honestly until those exist.
+ * Returns [OpenedTunnel] with the TLS streams and negotiated RSD endpoint.
+ * Userspace TCP to that RSD address is a separate step ([UserspaceEndpoint]).
  */
 object CoreDeviceTunnel {
-    class NotImplemented(
-        message: String = "CoreDevice TLS-PSK transport is not implemented yet",
-    ) : Exception(message)
 
-    /** Build the createListener JSON for a verified pairing session. */
+    class TunnelException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+    data class OpenedTunnel(
+        val session: TlsPskClient.TlsSession,
+        val parameters: TunnelParameters,
+        val input: InputStream,
+        val output: OutputStream,
+    ) : AutoCloseable {
+        override fun close() = session.close()
+    }
+
     fun createListenerRequest(session: VerifiedSession): String {
         val key = CreateListener.keyFromSession(session.sharedSecret)
         return CreateListener.tcpRequest(key).encode()
     }
 
     fun createListenerRequest(keys: SessionKeys): String {
-        // Prefer the raw shared secret when available; SessionKeys alone are control-channel keys.
-        val material = keys.writeKey
-        val key = Base64.getEncoder().encodeToString(material)
+        val key = Base64.getEncoder().encodeToString(keys.writeKey)
         return CreateListener.tcpRequest(key).encode()
     }
 
-    fun open(session: VerifiedSession): Nothing {
-        throw NotImplemented(
-            "tunnel for ${session.record.peer.identifier}: createListener + CDTunnel codecs exist; " +
-                "TLS-PSK transport and userspace TCP/IPv6 do not",
-        )
+    /**
+     * Complete the data-plane side: TLS-PSK + CDTunnel handshake.
+     * [host] is the device address used for the TCP connect (usually the same host as pairing).
+     * [listenerPort] comes from createListener response.
+     * [psk] is the pair-verify shared secret (or the key sent in createListener).
+     */
+    fun openDataPlane(
+        host: String,
+        listenerPort: Int,
+        psk: ByteArray,
+    ): OpenedTunnel {
+        Log.i(LogTag.COREDEVICE, "TLS-PSK connect $host:$listenerPort")
+        val tls = TlsPskClient(psk).connect(host, listenerPort)
+        try {
+            CdTunnel.writeJson(tls.output, ClientHandshake.request())
+            val responsePacket = CdTunnel.read(tls.input)
+            val json = JsonValue.parse(String(responsePacket.body, Charsets.UTF_8))
+            val params = TunnelParameters.fromHandshakeResponse(json)
+            Log.i(
+                LogTag.COREDEVICE,
+                "tunnel up client=${params.clientAddress} server=${params.serverAddress} rsd=${params.serverRsdPort}",
+            )
+            return OpenedTunnel(tls, params, tls.input, tls.output)
+        } catch (failure: Exception) {
+            tls.close()
+            throw TunnelException("CDTunnel handshake failed: ${failure.message}", failure)
+        }
     }
 
-    fun open(keys: SessionKeys): Nothing {
-        throw NotImplemented(
-            "tunnel from SessionKeys: codecs ready, TLS-PSK transport not built",
+    /** Convenience that still needs a live createListener exchange on the control channel. */
+    fun open(session: VerifiedSession, deviceHost: String, listenerPort: Int): OpenedTunnel =
+        openDataPlane(deviceHost, listenerPort, session.sharedSecret)
+
+    fun open(session: VerifiedSession): Nothing =
+        throw TunnelException(
+            "open(session) needs deviceHost + listenerPort from createListener; " +
+                "use open(session, host, port) after the control-channel createListener exchange",
         )
-    }
+
+    fun open(keys: SessionKeys): Nothing =
+        throw TunnelException("open(keys) needs host and listener port from createListener")
 }
+
+/** Placeholder for mapping a tunnel virtual address to a local TCP endpoint. */
+data class UserspaceEndpoint(
+    val address: InetAddress,
+    val port: Int,
+)

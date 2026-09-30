@@ -8,6 +8,7 @@ java {
 
 dependencies {
     api(project(":developer"))
+    api(project(":pairing"))
     implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
