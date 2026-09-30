@@ -12,9 +12,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Minimal HTTP server SideStore / LiveContainer-style clients can hit.
  *
- * GET /  → status JSON
- * GET /version → version string
+ * GET  /           → status JSON
+ * GET  /status     → status JSON
+ * GET  /version    → version string
+ * GET  /re/        → refresh/noop (SideStore cache)
  * POST /launch?bundleId=… → attempts JIT (fails until live device path works)
+ * GET  /launch_app?bundle_id=… → same as launch (some clients use GET)
  */
 class LocalHttpApi(
     private val port: Int = 8080,
@@ -65,6 +68,7 @@ class LocalHttpApi(
             writer.write("HTTP/1.1 $status\r\n")
             writer.write("Content-Type: $contentType\r\n")
             writer.write("Content-Length: ${body.toByteArray(Charsets.UTF_8).size}\r\n")
+            writer.write("Access-Control-Allow-Origin: *\r\n")
             writer.write("Connection: close\r\n\r\n")
             writer.write(body)
             writer.flush()
@@ -72,38 +76,58 @@ class LocalHttpApi(
     }
 
     private fun route(method: String, path: String): Triple<String, String, String> {
-        val pathOnly = path.substringBefore('?')
+        val pathOnly = path.substringBefore('?').trimEnd('/')
+        val pathNorm = if (pathOnly.isEmpty()) "/" else pathOnly
         val query = path.substringAfter('?', "")
         return when {
-            method == "GET" && (pathOnly == "/" || pathOnly == "/status") ->
+            method == "OPTIONS" ->
+                Triple("204 No Content", "", "text/plain")
+
+            method == "GET" && (pathNorm == "/" || pathNorm == "/status") ->
                 Triple(
                     "200 OK",
-                    """{"ok":true,"jit":"not_ready","stack":${jsonEscape(JitEngine.describeStack())}}""",
+                    """{"ok":true,"jit":"not_ready","version":"0.1.0","stack":${jsonEscape(JitEngine.describeStack())}}""",
                     "application/json",
                 )
-            method == "GET" && pathOnly == "/version" ->
-                Triple("200 OK", "0.1.0-dev", "text/plain; charset=utf-8")
-            method == "POST" && pathOnly == "/launch" -> {
-                val bundleId = query.substringAfter("bundleId=", "")
-                    .substringBefore('&')
-                    .ifEmpty { "unknown" }
-                val result = JitEngine.enable(bundleId)
-                when (result) {
-                    is JitEngine.Result.Granted ->
-                        Triple("200 OK", """{"ok":true,"pid":${result.pid}}""", "application/json")
-                    is JitEngine.Result.Failed ->
-                        Triple(
-                            "503 Service Unavailable",
-                            """{"ok":false,"error":${jsonEscape(result.reason)}}""",
-                            "application/json",
-                        )
-                }
-            }
+
+            method == "GET" && pathNorm == "/version" ->
+                Triple("200 OK", "0.1.0", "text/plain; charset=utf-8")
+
+            method == "GET" && (pathNorm == "/re" || pathNorm.startsWith("/re/")) ->
+                Triple("200 OK", """{"ok":true,"refreshed":true}""", "application/json")
+
+            method == "POST" && pathNorm == "/launch" -> launch(query)
+            method == "GET" && (pathNorm == "/launch" || pathNorm == "/launch_app") -> launch(query)
+
             else -> Triple(
                 "404 Not Found",
-                """{"ok":false,"error":"not found"}""",
+                """{"ok":false,"error":"not found","path":${jsonEscape(pathNorm)}}""",
                 "application/json",
             )
+        }
+    }
+
+    private fun launch(query: String): Triple<String, String, String> {
+        val bundleId = sequenceOf("bundleId", "bundle_id", "bundle")
+            .map { key ->
+                query.split('&')
+                    .map { it.substringBefore('=') to it.substringAfter('=', "") }
+                    .firstOrNull { it.first.equals(key, ignoreCase = true) }
+                    ?.second
+                    ?.takeIf { it.isNotBlank() }
+            }
+            .firstOrNull { it != null }
+            ?: "unknown"
+        val result = JitEngine.enable(bundleId)
+        return when (result) {
+            is JitEngine.Result.Granted ->
+                Triple("200 OK", """{"ok":true,"pid":${result.pid},"bundleId":${jsonEscape(bundleId)}}""", "application/json")
+            is JitEngine.Result.Failed ->
+                Triple(
+                    "503 Service Unavailable",
+                    """{"ok":false,"error":${jsonEscape(result.reason)},"bundleId":${jsonEscape(bundleId)}}""",
+                    "application/json",
+                )
         }
     }
 
@@ -117,7 +141,7 @@ class LocalHttpApi(
                     '\n' -> append("\\n")
                     '\r' -> append("\\r")
                     '\t' -> append("\\t")
-                    else -> append(ch)
+                    else -> if (ch.code < 0x20) append("\\u%04x".format(ch.code)) else append(ch)
                 }
             }
             append('"')
