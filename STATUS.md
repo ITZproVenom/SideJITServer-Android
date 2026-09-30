@@ -4,14 +4,12 @@ This file is the only place that says what works. Updated with the code it descr
 
 ## Current overall state
 
-**Protocol stack code is largely in place: pair-setup/verify, TLS-PSK client,
-CDTunnel, tunnel data-plane helpers, RSD parse, HTTP/2 frames, ProcessControl
-payloads, GDB attach sequence, local HTTP API, JIT orchestration.**
+**Protocol stack code is in place through userspace TCP, RSD, NSKeyedArchive,
+DVT ProcessControl archive send, and GDB attach sequence.**
 
 **Nothing has been validated against a physical iPhone/iPad. End-to-end JIT is
-not claimed.** `JitEngine.enable(bundleId)` returns a structured failure naming
-the missing live path. Partial paths (GDB on open streams, tunnel open when
-host/port/psk are known) exist for integration.
+not claimed.** `JitEngine.enable(...)` returns a structured failure naming the
+step that could not complete without a live device.
 
 ## Implemented (unit-tested codecs / local logic)
 
@@ -21,9 +19,12 @@ host/port/psk are known) exist for integration.
 | TLS-PSK client (BC, TLS_PSK_WITH_AES_256_GCM_SHA384) | IMPLEMENTED (no live device) |
 | CDTunnel framing + handshake parse | IMPLEMENTED |
 | Tunnel IPv6 helpers / length-prefixed packets | IMPLEMENTED |
-| RSD Handshake parse | IMPLEMENTED |
+| Userspace TCP client (SYN/ACK, seq, checksum, stream) | IMPLEMENTED |
+| RSD Handshake parse + RsdClient | IMPLEMENTED |
 | HTTP/2 frame codec (RemoteXPC transport) | IMPLEMENTED |
-| ProcessControl launch payload | IMPLEMENTED |
+| NSKeyedArchive encoder (bplist00, DVT method calls) | IMPLEMENTED |
+| ProcessControl launch archive + JSON | IMPLEMENTED |
+| DvtClient (preface + archive send) | IMPLEMENTED |
 | GDB remote JIT sequence | IMPLEMENTED |
 | Local HTTP API (/status, /launch) | IMPLEMENTED |
 | JIT orchestration | IMPLEMENTED (fails without live device) |
@@ -32,9 +33,9 @@ host/port/psk are known) exist for integration.
 
 - Pairing against real iOS 27+
 - createListener + TLS-PSK to a real listener port
-- Userspace TCP across the tunnel to RSD
-- Full RemoteXPC method dispatch / NSKeyedArchive DVT
-- Actual JIT grant
+- Userspace TCP across a real tunnel
+- Live RSD / DVT reply parsing (PID extraction)
+- Actual JIT grant via debugproxy
 
 ## Physical validation
 
