@@ -21,46 +21,58 @@ import java.util.Base64
 /**
  * The accessory half of remote pairing, for the case where the iOS device initiates.
  *
- * iOS 26 and later can pair *into* a host that advertises
- * `_remotepairing-pairable-host._tcp`: the phone opens the connection, the host shows
- * a six digit code, and the person types it on the phone. That removes the need for a
- * cable and for a pre-existing pairing record, which is the only reason a server like
- * this can run on an Android device with nothing else attached.
- *
- * This class owns one connection. It reads the handshake, runs SRP pair setup as the
- * server, and returns the resulting pairing record. It never invents success: every
- * unexpected message aborts with an exception.
+ * Supports pair-setup (new pairing with a six-digit code) and, when a [PairingStore]
+ * is supplied and the device asks for it, pair-verify against a stored record.
  */
 class PairableHost(
     private val identity: HostIdentity,
     private val stream: RpPairingStream,
-    /**
-     * Apple's "pinless" mode uses the all zero setup code, which means anyone on the
-     * network can pair. It stays off unless the operator asks for it.
-     */
+    private val store: PairingStore? = null,
     private val pinless: Boolean = false,
     private val random: SecureRandom = SecureRandom(),
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
 ) {
-    /** Called with the code the person has to type on the phone. */
     var onSetupCode: (String) -> Unit = {}
 
-    fun accept(): PairingRecord {
-        handshake()
-        return pairSetup()
+    /**
+     * Accept one connection. Returns either a fresh [PairingRecord] from setup or a
+     * [VerifiedSession] from verify. The caller persists setup results via [store].
+     */
+    fun accept(): AcceptResult {
+        val attemptVerify = handshake()
+        return if (attemptVerify) {
+            val store = this.store
+                ?: throw RpProtocolException("the device asked to verify but no pairing store is configured")
+            AcceptResult.Verified(PairVerify(identity, stream, store).verify())
+        } else {
+            val record = pairSetup()
+            store?.save(record)
+            AcceptResult.Setup(record)
+        }
     }
 
-    private fun handshake() {
+    /** Backwards-compatible entry that only performs setup. */
+    fun acceptSetup(): PairingRecord {
+        handshake(forceSetup = true)
+        return pairSetup().also { store?.save(it) }
+    }
+
+    private fun handshake(forceSetup: Boolean = false): Boolean {
         val request = stream.receivePlain()
         val handshake = request.path("request", "_0", "handshake", "_0")
             ?: throw RpProtocolException("the first message was not a handshake request")
-        if (handshake.path("hostOptions", "attemptPairVerify")?.asBool == true) {
-            // Pair verify needs a record we do not have; a fresh pairing is the only
-            // thing this side can do, and pretending otherwise would waste the user's
-            // time at the point where they are waiting for a code.
+        val attemptVerify = !forceSetup &&
+            handshake.path("hostOptions", "attemptPairVerify")?.asBool == true
+
+        if (attemptVerify && store == null) {
             throw RpProtocolException("the device asked to verify an existing pairing")
         }
-        Log.i(LogTag.PAIRING, "handshake from a device, replying as a pairable host")
+
+        Log.i(
+            LogTag.PAIRING,
+            if (attemptVerify) "handshake: device wants pair-verify"
+            else "handshake from a device, replying as a pairable host",
+        )
         stream.sendPlain(
             jsonObject(
                 "response" to jsonObject(
@@ -91,6 +103,7 @@ class PairableHost(
                 ),
             ),
         )
+        return attemptVerify
     }
 
     private fun pairSetup(): PairingRecord {
@@ -173,10 +186,6 @@ class PairableHost(
         return PairingRecord(peer, session.sessionKey, clockSeconds())
     }
 
-    /**
-     * The accessory identity the device stores: who we are, our long term public key,
-     * and a signature the device can check against the key it just received.
-     */
     private fun accessoryIdentityTlv(sessionKey: ByteArray): ByteArray {
         val accessoryX = derive(sessionKey, ACCESSORY_SIGN_SALT, ACCESSORY_SIGN_INFO)
         val publicKey = identity.longTermPublicKey
@@ -203,12 +212,6 @@ class PairableHost(
             .build()
     }
 
-    /**
-     * Checks the signature the device sent over its own identity. SRP has already
-     * proved the person typed the right code, so a bad signature here is logged rather
-     * than treated as fatal: refusing would turn a protocol detail we cannot test
-     * against every iOS build into a pairing failure.
-     */
     private fun verifyDeviceSignature(
         sessionKey: ByteArray,
         entries: List<Tlv8.Entry>,
@@ -292,12 +295,11 @@ class PairableHost(
         private const val ACCESSORY_SIGN_INFO = "Pair-Setup-Accessory-Sign-Info"
         private const val DEVICE_SIGN_SALT = "Pair-Setup-Controller-Sign-Salt"
         private const val DEVICE_SIGN_INFO = "Pair-Setup-Controller-Sign-Info"
-
-        /**
-         * The protocol carries a serial number field. An Android device has no Apple
-         * serial to give, and there is nothing to be gained by fabricating a plausible
-         * looking one, so a clearly artificial constant is sent.
-         */
         private const val SERIAL_NUMBER = "AAAAAAAAAAAA"
     }
+}
+
+sealed class AcceptResult {
+    data class Setup(val record: PairingRecord) : AcceptResult()
+    data class Verified(val session: VerifiedSession) : AcceptResult()
 }

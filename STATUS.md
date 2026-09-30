@@ -15,26 +15,27 @@ Legend:
 
 ## Current overall state
 
-**The application can now run the full device-initiated pairing conversation,
-but it has never been run against a real iPhone or iPad, and it still does not
-provide JIT.** On start it generates a stable host identity, listens for a
-device-initiated pairing on a TCP port, advertises
-`_remotepairing-pairable-host._tcp` over multicast DNS, shows a six digit setup
-code on screen, completes SRP pair setup and stores the resulting pairing
-encrypted on the device. Everything above that layer - the encrypted tunnel,
-RSD, RemoteXPC, the developer services, JIT itself and the local HTTP API -
-does not exist yet.
+**The application can run device-initiated pair-setup and has a pair-verify
+state machine plus a GDB remote codec. It has never been run against a real
+iPhone or iPad, and it still does not provide JIT.** On start it generates a
+stable host identity, listens for a device-initiated pairing on a TCP port,
+advertises `_remotepairing-pairable-host._tcp` over multicast DNS, shows a six
+digit setup code on screen, completes SRP pair setup and stores the resulting
+pairing encrypted on the device. Pair-verify (reconnect) is implemented in
+code against the stored record. Everything above that layer — the encrypted
+tunnel, RSD, RemoteXPC, the developer services, end-to-end JIT and the local
+HTTP API — does not exist yet.
 
 ## Build and packaging
 
 | Item | State |
 | --- | --- |
 | Gradle multi-module project, Android SDK 35, minSdk 24 | IMPLEMENTED + TESTED (builds locally and in CI) |
-| Debug APK | IMPLEMENTED + TESTED (installable, 12.7 MB) |
+| Debug APK | IMPLEMENTED + TESTED (installable, ~12 MB) |
 | Release APK | IMPLEMENTED + UNTESTED (unsigned; needs your own key) |
 | Phone / tablet compatibility | IMPLEMENTED + UNTESTED on hardware |
 | Android TV / Google TV launcher entry | IMPLEMENTED + UNTESTED on hardware |
-| GitHub Actions: tests, lint, debug + release APK, artifacts | IMPLEMENTED |
+| GitHub Actions: tests, lint, debug APK, Releases upload | IMPLEMENTED |
 
 ## Runtime
 
@@ -68,41 +69,42 @@ does not exist yet.
 
 | Item | State |
 | --- | --- |
-| SipHash-2-4 and the mDNS `authTag` | IMPLEMENTED + TESTED (paper vectors and a captured advertisement) |
-| JSON reader and writer | IMPLEMENTED + TESTED (unit tests) |
-| SHA-256 / SHA-512, HMAC, HKDF | IMPLEMENTED + TESTED (RFC 4231 and RFC 5869 vectors) |
-| X25519 | IMPLEMENTED + TESTED (RFC 7748 section 6.1 vectors) |
-| Ed25519 | IMPLEMENTED + TESTED (RFC 8032 section 7.1 vectors) |
-| ChaCha20-Poly1305 | IMPLEMENTED + TESTED (RFC 8439 section 2.8.2 vector) |
-| SRP-6a (3072-bit, SHA-512) accessory side | IMPLEMENTED + TESTED (round trip against an independent test client; never run against an iPhone) |
-| OPACK encode/decode | IMPLEMENTED + TESTED (unit tests, including back references) |
-| TLV8 encode/decode | IMPLEMENTED + TESTED (unit tests, including 255-byte fragmentation) |
-| Byte readers and writers | IMPLEMENTED + TESTED (unit tests) |
+| SipHash-2-4 and the mDNS `authTag` | IMPLEMENTED + TESTED |
+| JSON reader and writer | IMPLEMENTED + TESTED |
+| SHA-256 / SHA-512, HMAC, HKDF | IMPLEMENTED + TESTED |
+| X25519 | IMPLEMENTED + TESTED |
+| Ed25519 | IMPLEMENTED + TESTED |
+| ChaCha20-Poly1305 | IMPLEMENTED + TESTED |
+| SRP-6a (3072-bit, SHA-512) accessory side | IMPLEMENTED + TESTED (stand-in only; never vs iPhone) |
+| OPACK encode/decode | IMPLEMENTED + TESTED |
+| TLV8 encode/decode | IMPLEMENTED + TESTED |
+| Byte readers and writers | IMPLEMENTED + TESTED |
 
 ## Pairing
 
 | Item | State |
 | --- | --- |
 | `RPPairing` framing and JSON envelopes | IMPLEMENTED + TESTED (unit tests) |
-| Pair setup (device-initiated, host as accessory) | IMPLEMENTED + TESTED against a stand-in device over a real socket; **never against an iPhone** |
+| Pair setup (device-initiated, host as accessory) | IMPLEMENTED + TESTED against a stand-in; **never against an iPhone** |
 | Setup code shown on screen, wrong code rejected | IMPLEMENTED + TESTED (unit tests) |
 | Host identity, stable across restarts | IMPLEMENTED + UNTESTED on hardware |
 | Keystore-backed encrypted pairing storage | IMPLEMENTED + UNTESTED on hardware |
-| Pair verify (reconnecting to a device already paired) | NOT IMPLEMENTED |
+| Pair verify (reconnect with stored record) | IMPLEMENTED + UNTESTED (code + unit path; never vs iPhone) |
+| SessionKeys after verify (Control-Read/Write) | IMPLEMENTED + UNTESTED |
 | `_remotepairing._tcp` browsing for a paired device | NOT IMPLEMENTED |
 
 ## CoreDevice and above
 
 | Item | State |
 | --- | --- |
-| TLS-PSK tunnel | NOT IMPLEMENTED |
+| TLS-PSK tunnel | NOT IMPLEMENTED (explicit failure, no fake success) |
 | Userspace TCP over the tunnel | NOT IMPLEMENTED |
 | RSD | NOT IMPLEMENTED |
 | RemoteXPC / HTTP/2 | NOT IMPLEMENTED |
 | DVT, ProcessControl | NOT IMPLEMENTED |
-| debugproxy | NOT IMPLEMENTED |
-| GDB remote protocol | NOT IMPLEMENTED |
-| JIT | NOT IMPLEMENTED |
+| debugproxy transport | NOT IMPLEMENTED |
+| GDB remote protocol (packet codec + JIT attach sequence) | IMPLEMENTED + TESTED (unit tests only; no live debugproxy) |
+| JIT end-to-end | NOT IMPLEMENTED |
 | Local HTTP API | NOT IMPLEMENTED |
 
 ## Physical validation
