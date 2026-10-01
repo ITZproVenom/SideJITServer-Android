@@ -121,11 +121,12 @@ data class TunnelParameters(
 object CreateListener {
     fun tcpRequest(pskKeyBase64: String): JsonValue =
         JsonValue.parse(
-            """{"request":{"_0":{"createListener":{"key":"$pskKeyBase64","peerConnectionsInfo":[{"owningPID":1,"owningProcessName":"SideJITServer"}],"transportProtocolType":"tcp"}}}}""",
+            """{"request":{"_0":{"createListener":{"key":"$pskKeyBase64","transportProtocolType":"tcp"}}}}""",
         )
 
     fun extractPort(response: JsonValue): Int {
         val port = response.path("createListener", "port")?.asLong
+            ?: response.path("response", "_1", "createListener", "port")?.asLong
             ?: response.path("response", "_0", "createListener", "port")?.asLong
             ?: throw CdTunnelException("createListener response had no port")
         return port.toInt()
