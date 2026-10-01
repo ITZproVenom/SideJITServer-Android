@@ -3,20 +3,18 @@ package dev.sidejit.pairing
 import dev.sidejit.core.logging.Log
 import dev.sidejit.core.logging.LogTag
 import dev.sidejit.core.logging.describe
+import dev.sidejit.core.serialization.JsonValue
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Accepts the connections an iOS device makes to our advertised pairable host port and
  * runs one [PairableHost] conversation per connection.
- *
- * Only one pairing is handled at a time. A phone that connects while another pairing is
- * in progress is closed immediately rather than queued, because two setup codes on one
- * screen would be worse than a retry.
  */
 class PairableHostListener(
     private val identity: HostIdentity,
@@ -24,16 +22,11 @@ class PairableHostListener(
     private val pinless: Boolean = false,
     private val requestedPort: Int = 0,
 ) {
-    /** Called with the code to show, and with null when the attempt is over. */
     var onSetupCode: (String?) -> Unit = {}
-
-    /** Called when a device finishes pairing (setup or verify). */
-    var onPaired: (PairingRecord) -> Unit = {}
-
-    /** Called when verify succeeds (session keys available). */
-    var onVerified: (VerifiedSession) -> Unit = {}
-
-    /** Called when an attempt fails, with a short reason suitable for a status screen. */
+    var onPaired: (PairingRecord, String) -> Unit = { _, _ -> }
+    var onVerified: (VerifiedSession, String) -> Unit = { _, _ -> }
+    /** peerHost, listenerPort from createListener if obtained on this connection */
+    var onTunnelListener: (String, Int) -> Unit = { _, _ -> }
     var onFailure: (String) -> Unit = {}
 
     private val running = AtomicBoolean(false)
@@ -41,7 +34,6 @@ class PairableHostListener(
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
 
-    /** The port actually bound, available once [start] returns. */
     val port: Int get() = serverSocket?.localPort ?: -1
 
     @Synchronized
@@ -98,7 +90,8 @@ class PairableHostListener(
         connection.use { socket ->
             socket.tcpNoDelay = true
             socket.soTimeout = SESSION_TIMEOUT_MILLIS
-            Log.i(LogTag.PAIRING, "a device connected from ${socket.inetAddress?.hostAddress}")
+            val peerHost = socket.inetAddress?.hostAddress ?: "unknown"
+            Log.i(LogTag.PAIRING, "a device connected from $peerHost")
             val stream = RpPairingStream(
                 BufferedInputStream(socket.getInputStream()),
                 BufferedOutputStream(socket.getOutputStream()),
@@ -113,27 +106,75 @@ class PairableHostListener(
             try {
                 when (val result = host.accept()) {
                     is AcceptResult.Setup -> {
-                        onPaired(result.record)
+                        onPaired(result.record, peerHost)
+                        Log.i(LogTag.PAIRING, "pair-setup finished for ${result.record.peer.name} from $peerHost")
                     }
                     is AcceptResult.Verified -> {
-                        onVerified(result.session)
-                        onPaired(result.session.record)
+                        onVerified(result.session, peerHost)
+                        onPaired(result.session.record, peerHost)
+                        Log.i(LogTag.PAIRING, "pair-verify finished for ${result.session.record.peer.name} from $peerHost")
+                        tryCreateListener(stream, result.session, peerHost)
                     }
                 }
             } catch (failure: Exception) {
-                Log.w(LogTag.PAIRING, "pairing failed: ${failure.describe()}")
+                Log.e(LogTag.PAIRING, "pairing attempt failed: ${failure.describe()}", failure)
                 onFailure(failure.message ?: failure.javaClass.simpleName)
             }
         }
     }
 
+    /**
+     * After pair-verify the control channel can carry createListener.
+     * If the device answers with a port, we can open the CoreDevice data plane.
+     */
+    private fun tryCreateListener(stream: RpPairingStream, session: VerifiedSession, peerHost: String) {
+        try {
+            val keyB64 = Base64.getEncoder().encodeToString(session.sharedSecret)
+            val request = JsonValue.parse(
+                """{"request":{"_0":{"createListener":{"key":"$keyB64","peerConnectionsInfo":[{"owningPID":1,"owningProcessName":"SideJITServer"}],"transportProtocolType":"tcp"}}}}""",
+            )
+            val sealed = try {
+                val writeKey = session.keys.writeKey
+                dev.sidejit.core.crypto.ChaChaPoly.seal(
+                    writeKey,
+                    dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
+                    request.encode().toByteArray(Charsets.UTF_8),
+                )
+            } catch (_: Exception) {
+                null
+            }
+            if (sealed != null) {
+                stream.sendEncrypted(sealed)
+            } else {
+                stream.sendPlain(request)
+            }
+            val reply = stream.receive()
+            val json = when (reply) {
+                is RpMessage.Plain -> reply.value
+                is RpMessage.Encrypted -> {
+                    val plain = dev.sidejit.core.crypto.ChaChaPoly.open(
+                        session.keys.readKey,
+                        dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
+                        reply.ciphertext,
+                    )
+                    JsonValue.parse(String(plain, Charsets.UTF_8))
+                }
+            }
+            val port = json.path("createListener", "port")?.asLong
+                ?: json.path("response", "_0", "createListener", "port")?.asLong
+            if (port != null) {
+                Log.i(LogTag.PAIRING, "createListener returned port $port for $peerHost")
+                onTunnelListener(peerHost, port.toInt())
+            } else {
+                Log.w(LogTag.PAIRING, "createListener reply had no port: ${json.encode().take(200)}")
+            }
+        } catch (failure: Exception) {
+            Log.w(LogTag.PAIRING, "createListener after verify failed: ${failure.describe()}")
+        }
+    }
+
     companion object {
         private const val BACKLOG = 4
-
-        /**
-         * A person has to read a code and type it, so the conversation is allowed to be
-         * slow, but not to hold the single pairing slot forever.
-         */
         const val SESSION_TIMEOUT_MILLIS: Int = 180_000
     }
 }

@@ -7,6 +7,7 @@ import dev.sidejit.core.logging.describe
 import dev.sidejit.core.mdns.MdnsResponder
 import dev.sidejit.core.mdns.ServiceRegistration
 import dev.sidejit.core.net.Interfaces
+import dev.sidejit.jit.JitEngine
 import dev.sidejit.pairing.HostIdentity
 import dev.sidejit.pairing.PairableHostListener
 import dev.sidejit.pairing.VerifiedSession
@@ -21,14 +22,6 @@ import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-/**
- * The server, independent of anything on screen.
- *
- * The television this is meant to run on may have no working display at all,
- * so nothing here may depend on an Activity existing, being visible, or ever
- * having been visible. The foreground service owns this object; the interface
- * only reads [state].
- */
 class ServerRuntime private constructor(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -45,6 +38,8 @@ class ServerRuntime private constructor(private val context: Context) {
     private var watcher: NetworkWatcher? = null
     private var lastSignature: String = ""
     private val lastVerified = AtomicReference<VerifiedSession?>(null)
+    private val lastPeerHost = AtomicReference<String?>(null)
+    private val lastListenerPort = AtomicReference<Int?>(null)
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
@@ -64,51 +59,56 @@ class ServerRuntime private constructor(private val context: Context) {
                         store.all().joinToString { record -> record.peer.name } + " (re-verify on connect)",
                     )
                 },
-                tunnel = Stage(
-                    "CoreDevice tunnel",
-                    StageStatus.IDLE,
-                    "code present; opens after pair-verify + createListener",
-                ),
-                developerServices = Stage(
-                    "Developer services",
-                    StageStatus.IDLE,
-                    "RSD/DVT/GDB code present; needs live tunnel",
-                ),
-                jit = Stage(
-                    "JIT",
-                    StageStatus.IDLE,
-                    "orchestration present; needs paired device + live path",
-                ),
+                tunnel = Stage("CoreDevice tunnel", StageStatus.IDLE, "waiting for pair-verify + createListener"),
+                developerServices = Stage("Developer services", StageStatus.IDLE, "needs live tunnel"),
+                jit = Stage("JIT", StageStatus.IDLE, "needs live tunnel + DVT/GDB"),
             )
         }
 
         val pairing = PairableHostListener(host, store)
         pairing.onSetupCode = { code -> _state.update { it.copy(setupCode = code) } }
-        pairing.onPaired = { record ->
+        pairing.onPaired = { record, peerHost ->
+            lastPeerHost.set(peerHost)
             _state.update {
                 it.copy(
-                    device = Stage("Paired iOS device", StageStatus.READY, record.peer.name),
+                    device = Stage("Paired iOS device", StageStatus.READY, "${record.peer.name} @ $peerHost"),
                     pairing = Stage("Wireless pairing", StageStatus.READY, "waiting for a device"),
                 )
             }
         }
-        pairing.onVerified = { session ->
+        pairing.onVerified = { session, peerHost ->
             lastVerified.set(session)
+            lastPeerHost.set(peerHost)
             _state.update {
                 it.copy(
                     device = Stage(
                         "Paired iOS device",
                         StageStatus.READY,
-                        "${session.record.peer.name} (verified)",
+                        "${session.record.peer.name} (verified) @ $peerHost",
                     ),
                     tunnel = Stage(
                         "CoreDevice tunnel",
-                        StageStatus.IDLE,
-                        "verified session ready; createListener still needs device",
+                        StageStatus.RUNNING,
+                        "verified; requesting createListener\u2026",
                     ),
                 )
             }
-            Log.i(LogTag.SERVER, "pair-verify succeeded for ${session.record.peer.name}")
+            Log.i(LogTag.SERVER, "pair-verify ok ${session.record.peer.name} from $peerHost")
+        }
+        pairing.onTunnelListener = { peerHost, listenerPort ->
+            lastPeerHost.set(peerHost)
+            lastListenerPort.set(listenerPort)
+            _state.update {
+                it.copy(
+                    tunnel = Stage(
+                        "CoreDevice tunnel",
+                        StageStatus.READY,
+                        "createListener port $listenerPort on $peerHost",
+                    ),
+                    jit = Stage("JIT", StageStatus.IDLE, "ready to attempt /launch"),
+                )
+            }
+            Log.i(LogTag.SERVER, "tunnel listener $peerHost:$listenerPort")
         }
         pairing.onFailure = { reason ->
             _state.update {
@@ -131,11 +131,9 @@ class ServerRuntime private constructor(private val context: Context) {
         }
 
         startHttpApi()
-
         lease = MulticastLease(context).apply { acquire() }
         publishAddresses()
         startResponder(host, port)
-
         watcher = NetworkWatcher(context) { onNetworkChanged(host, port) }.also { it.start() }
     }
 
@@ -144,7 +142,11 @@ class ServerRuntime private constructor(private val context: Context) {
         var lastError: Exception? = null
         for (p in candidates) {
             try {
-                val api = LocalHttpApi(port = p)
+                val api = LocalHttpApi(
+                    port = p,
+                    statusProvider = { buildStatusJson() },
+                    launchHandler = { bundleId -> handleLaunch(bundleId) },
+                )
                 api.start()
                 httpApi = api
                 val bound = api.boundPort
@@ -165,14 +167,56 @@ class ServerRuntime private constructor(private val context: Context) {
             }
         }
         _state.update {
-            it.copy(
-                api = Stage(
-                    "Local HTTP API",
-                    StageStatus.FAILED,
-                    lastError?.describe() ?: "could not bind",
-                ),
-            )
+            it.copy(api = Stage("Local HTTP API", StageStatus.FAILED, lastError?.describe() ?: "could not bind"))
         }
+    }
+
+    private fun buildStatusJson(): String {
+        val session = lastVerified.get()
+        val peer = lastPeerHost.get()
+        val listenerPort = lastListenerPort.get()
+        val paired = session != null
+        val jit = when {
+            session != null && listenerPort != null -> "ready_to_attempt"
+            session != null -> "paired_need_listener"
+            else -> "not_ready"
+        }
+        val device = session?.record?.peer?.name?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
+        val peerJson = peer?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
+        val portJson = listenerPort?.toString() ?: "null"
+        val stack = LocalHttpApi.jsonEscapeStatic(JitEngine.describeStack())
+        return """{"ok":true,"jit":${LocalHttpApi.jsonEscapeStatic(jit)},"paired":$paired,"device":$device,"peerHost":$peerJson,"listenerPort":$portJson,"version":"0.1.0","stack":$stack}"""
+    }
+
+    private fun handleLaunch(bundleId: String): JitEngine.Result {
+        val session = lastVerified.get()
+            ?: return JitEngine.Result.Failed(
+                "no verified session yet \u2014 complete wireless pair (and re-verify) first; bundleId=$bundleId",
+            )
+        val peer = lastPeerHost.get()
+            ?: return JitEngine.Result.Failed(
+                "paired (${session.record.peer.name}) but peer IP unknown; pair again; bundleId=$bundleId",
+            )
+        val listenerPort = lastListenerPort.get()
+            ?: return JitEngine.Result.Failed(
+                "paired with ${session.record.peer.name} @ $peer but createListener port missing. " +
+                    "Re-pair so verify runs again and watch Android logs for createListener. bundleId=$bundleId",
+            )
+        _state.update {
+            it.copy(jit = Stage("JIT", StageStatus.RUNNING, "launch $bundleId via tunnel\u2026"))
+        }
+        val result = JitEngine.enable(bundleId, session, peer, listenerPort)
+        when (result) {
+            is JitEngine.Result.Granted ->
+                _state.update {
+                    it.copy(jit = Stage("JIT", StageStatus.READY, "granted pid=${result.pid} for $bundleId"))
+                }
+            is JitEngine.Result.Failed ->
+                _state.update {
+                    it.copy(jit = Stage("JIT", StageStatus.FAILED, result.reason.take(120)))
+                }
+        }
+        return result
     }
 
     private fun startResponder(host: HostIdentity, port: Int) {
@@ -234,13 +278,8 @@ class ServerRuntime private constructor(private val context: Context) {
         if (signature == lastSignature) return
         Log.i(LogTag.SERVER, "the network changed, renewing the advertisement")
         publishAddresses()
-        val current = responder
-        if (current == null) {
-            startResponder(host, port)
-        } else {
-            runCatching { current.stop() }
-            startResponder(host, port)
-        }
+        runCatching { responder?.stop() }
+        startResponder(host, port)
     }
 
     fun stop() {
@@ -258,6 +297,8 @@ class ServerRuntime private constructor(private val context: Context) {
         lease = null
         identity = null
         lastVerified.set(null)
+        lastPeerHost.set(null)
+        lastListenerPort.set(null)
         _state.value = ServerState()
     }
 
