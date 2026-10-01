@@ -42,7 +42,7 @@ class UserspaceTcpTest {
         val params = TunnelParameters("fd00::1", "fd00::2", "ffff:ffff:ffff:ffff::", 1280, 58783)
         val exec = Executors.newSingleThreadExecutor()
         val fut = exec.submit {
-            val syn = TunnelDataPlane.readLengthPrefixed(sFromC)
+            val syn = TunnelDataPlane.readPacket(sFromC)
             assertTrue(TunnelDataPlane.isIpv6(syn))
             val tcpOff = 40
             val clientSeq = ((syn[tcpOff+4].toInt() and 0xFF) shl 24) or ((syn[tcpOff+5].toInt() and 0xFF) shl 16) or ((syn[tcpOff+6].toInt() and 0xFF) shl 8) or (syn[tcpOff+7].toInt() and 0xFF)
@@ -59,8 +59,8 @@ class UserspaceTcpTest {
             reply[tcpOff+10] = ((ack ushr 8) and 0xFF).toByte(); reply[tcpOff+11] = (ack and 0xFF).toByte()
             reply[tcpOff+12] = 0x50.toByte(); reply[tcpOff+13] = 0x12.toByte()
             reply[tcpOff+14] = 0xff.toByte(); reply[tcpOff+15] = 0xff.toByte()
-            TunnelDataPlane.writeLengthPrefixed(s2c, reply)
-            TunnelDataPlane.readLengthPrefixed(sFromC)
+            TunnelDataPlane.writePacket(s2c, reply)
+            TunnelDataPlane.readPacket(sFromC)
         }
         val stream = UserspaceTcp.connect(cFromS, c2s, params, 58783, 40000, 5000)
         fut.get(5, TimeUnit.SECONDS)
