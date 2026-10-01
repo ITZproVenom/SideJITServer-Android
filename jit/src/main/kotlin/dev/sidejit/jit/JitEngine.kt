@@ -4,6 +4,7 @@ import dev.sidejit.coredevice.CoreDeviceTunnel
 import dev.sidejit.coredevice.RsdClient
 import dev.sidejit.coredevice.UserspaceTcp
 import dev.sidejit.developer.DebugProxy
+import dev.sidejit.developer.DtxProcessControl
 import dev.sidejit.developer.GdbRemote
 import dev.sidejit.developer.ProcessControl
 import dev.sidejit.pairing.VerifiedSession
@@ -18,15 +19,15 @@ object JitEngine {
 
     fun enable(bundleId: String): Result =
         Result.Failed(
-            "JIT needs a live device path: pair-verify → createListener → " +
-                "CoreDeviceTunnel.openDataPlane → UserspaceTcp → RSD → DVT/ProcessControl → " +
-                "debugproxy → GDB attach. bundleId=$bundleId",
+            "JIT needs a live device path: pair-verify -> createListener -> " +
+                "CoreDeviceTunnel.openDataPlane -> UserspaceTcp -> RSD -> DTX ProcessControl -> " +
+                "debugproxy -> GDB attach. bundleId=$bundleId",
         )
 
     /**
-     * Full software path when pair-verify + createListener port are already known.
-     * Never claims Granted unless GDB sequence completes on an open debugproxy stream
-     * (which still requires a live device to produce a real PID and service).
+     * Full software path when pair-verify and createListener port are already known.
+     * A Result.Granted only means the complete software sequence returned without
+     * protocol error. Physical iPhone/iPad validation is still required.
      */
     fun enable(
         bundleId: String,
@@ -46,103 +47,66 @@ object JitEngine {
                     val handshake = RsdClient(rsdTcp.input, rsdTcp.output).readHandshake()
                     val serviceNames = handshake.services.map { it.name }
 
-                    val pc = handshake.service(ProcessControl.SERVICE)
+                    val processService = handshake.service(ProcessControl.SERVICE)
                         ?: handshake.services.firstOrNull {
                             it.name.contains("processcontrol", ignoreCase = true)
                         }
-                    if (pc == null) {
-                        return Result.Failed(
-                            "userspace TCP + RSD ok; ProcessControl not advertised " +
-                                "(services=$serviceNames); bundleId=$bundleId",
+                        ?: return Result.Failed(
+                            "RSD did not advertise ProcessControl (services=$serviceNames); " +
+                                "bundleId=$bundleId",
                         )
-                    }
 
                     val processTcp = UserspaceTcp.connect(
                         tunnel.input,
                         tunnel.output,
                         tunnel.parameters,
-                        pc.port,
+                        processService.port,
                     )
                     try {
-                        DtxProcessControl(processTcp.input, processTcp.output).use { processControl ->
-                            val pid = processControl.launchSuspended(bundleId)
-
-                            // Connect to the modern RSD debugproxy service and perform
-                            // the synchronous GDB attach/detach sequence.
-                            val debugSvc = handshake.service(ProcessControl.DEBUGPROXY)
-                                ?: handshake.service(ProcessControl.DEBUGSERVER)
-                                ?: handshake.services.firstOrNull {
-                                    it.name.contains("debugproxy", ignoreCase = true)
-                                }
-                            if (debugSvc == null) {
-                                return Result.Failed(
-                                    "ProcessControl launched pid=$pid for $bundleId but no " +
-                                        "debugproxy service is advertised (services=$serviceNames)",
-                                )
-                            }
-
-                            val debugTcp = UserspaceTcp.connect(
-                                tunnel.input,
-                                tunnel.output,
-                                tunnel.parameters,
-                                debugSvc.port,
-                            )
-                            try {
-                                DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
-                                Result.Granted(bundleId, pid)
-                            } catch (gdbFail: Exception) {
-                                Result.Failed(
-                                    "pid=$pid for $bundleId; debugproxy open ok on port " +
-                                        debugSvc.port + " but GDB sequence failed: " + gdbFail.message,
-                                )
-                            } finally {
-                                runCatching { debugTcp.close() }
-                            }
+                        val pid = DtxProcessControl(
+                            processTcp.input,
+                            processTcp.output,
+                        ).use { processControl ->
+                            processControl.launchSuspended(bundleId)
                         }
-                    } finally {
-                        runCatching { processTcp.close() }
-                    }
-                        val debugSvc = handshake.service(ProcessControl.DEBUGPROXY)
+
+                        val debugService = handshake.service(ProcessControl.DEBUGPROXY)
                             ?: handshake.service(ProcessControl.DEBUGSERVER)
                             ?: handshake.services.firstOrNull {
-                                it.name.contains("debugserver", ignoreCase = true) ||
-                                    it.name.contains("debugproxy", ignoreCase = true)
+                                it.name.contains("debugproxy", ignoreCase = true) ||
+                                    it.name.contains("debugserver", ignoreCase = true)
                             }
-                        if (debugSvc == null) {
-                            return Result.Failed(
-                                "DVT returned pid=$pid for $bundleId but no debugproxy/debugserver " +
-                                    "in RSD (services=$serviceNames)",
+                            ?: return Result.Failed(
+                                "ProcessControl launched pid=$pid for $bundleId but RSD " +
+                                    "did not advertise a debugproxy/debugserver service " +
+                                    "(services=$serviceNames)",
                             )
-                        }
 
                         val debugTcp = UserspaceTcp.connect(
                             tunnel.input,
                             tunnel.output,
                             tunnel.parameters,
-                            debugSvc.port,
+                            debugService.port,
                         )
                         try {
                             DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
-                            // GDB sequence was written; without a live device we cannot
-                            // confirm the kernel granted JIT. Report success only if the
-                            // stream path completed without exception — still document
-                            // that physical validation is required.
-                            Result.Granted(bundleId, pid)
-                        } catch (gdbFail: Exception) {
-                            Result.Failed(
-                                "pid=$pid for $bundleId; debugproxy open ok on port " +
-                                    "${debugSvc.port} but GDB sequence failed: ${gdbFail.message}",
+                            return Result.Granted(bundleId, pid)
+                        } catch (failure: Exception) {
+                            return Result.Failed(
+                                "pid=$pid for $bundleId; debugproxy/GDB failed: " + failure.message,
                             )
                         } finally {
                             runCatching { debugTcp.close() }
                         }
+                    } finally {
+                        runCatching { processTcp.close() }
                     }
                 } finally {
                     runCatching { rsdTcp.close() }
                 }
             }
         } catch (failure: Exception) {
-            Result.Failed("path failed: ${failure.message}")
+            Result.Failed("path failed: " + (failure.message ?: failure.javaClass.simpleName))
         }
     }
 
@@ -161,6 +125,7 @@ object JitEngine {
     }
 
     fun processControlLaunchPayload(bundleId: String) = ProcessControl.launchSuspended(bundleId)
+
     fun processControlLaunchArchive(bundleId: String): ByteArray =
         ProcessControl.launchSuspendedArchive(bundleId)
 
@@ -170,12 +135,9 @@ object JitEngine {
         appendLine("pair-setup/verify: code present")
         appendLine("TLS-PSK + CDTunnel: code present")
         appendLine("userspace TCP (client, IPv6, raw-packet CDTunnel framing): code present")
-        appendLine("RSD parse + client: code present")
-        appendLine("RemoteXPC HTTP/2 frames: code present")
-        appendLine("NSKeyedArchive encoder (DVT method calls): code present")
-        appendLine("ProcessControl launch archive: code present")
+        appendLine("RSD RemoteXPC XPC over HTTP/2: code present")
         appendLine("DTX ProcessControl + NSKeyedArchive launch: code present")
-        appendLine("debugproxy + GDB attach sequence: code present")
+        appendLine("debugproxy + synchronized GDB attach/detach: code present")
         appendLine("live device validation: none")
     }
 }
