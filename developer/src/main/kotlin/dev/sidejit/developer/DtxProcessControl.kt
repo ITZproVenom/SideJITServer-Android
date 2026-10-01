@@ -30,10 +30,19 @@ class DtxProcessControl(
                 "KillExisting" to NsKeyedArchive.bool(true),
             ),
         )
-        val argBytes = NsKeyedArchive.encode(arguments)
-        val reply = methodCall(serviceChannel, selector, listOf(
-            PrimitiveArg.Int32(serviceChannel),
-        ), extra = listOf(argBytes))
+        val reply = methodCall(
+            serviceChannel,
+            selector,
+            listOf(
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(NsKeyedArchive.text("/private/"))),
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(NsKeyedArchive.text(bundleId))),
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(NsKeyedArchive.dict(
+                    "NSUnbufferedIO" to NsKeyedArchive.text("YES"),
+                ))),
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(NsKeyedArchive.array())),
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(arguments)),
+            ),
+        )
         if (reply.messageType == MSG_ERROR) {
             throw DtxException("ProcessControl returned an error")
         }
@@ -58,11 +67,9 @@ class DtxProcessControl(
         return code
     }
 
-    private fun methodCall(channel: Int, selector: ByteArray, args: List<PrimitiveArg>, extra: List<ByteArray> = emptyList()): DtxReply {
+    private fun methodCall(channel: Int, selector: ByteArray, args: List<PrimitiveArg>): DtxReply {
         val id = nextId()
-        val all = ArrayList<PrimitiveArg>(args.size + extra.size)
-        all.addAll(args)
-        extra.forEach { all.add(PrimitiveArg.Bytes(it)) }
+        val all = args
         val aux = if (all.isEmpty()) ByteArray(0) else primitiveDictionary(*all.toTypedArray())
         writeFrame(id, 0, channel, true, selector, aux)
         return readReply(id)
