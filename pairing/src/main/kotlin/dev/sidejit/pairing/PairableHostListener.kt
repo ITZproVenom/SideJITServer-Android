@@ -138,7 +138,7 @@ class PairableHostListener(
             )
             val sealed = dev.sidejit.core.crypto.ChaChaPoly.seal(
                 session.keys.writeKey,
-                dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
+                dev.sidejit.core.crypto.ChaChaPoly.rppairingNonce(0L),
                 request.encode().toByteArray(Charsets.UTF_8),
             )
             stream.sendEncrypted(sealed)
@@ -150,7 +150,7 @@ class PairableHostListener(
                 is RpMessage.Encrypted -> {
                     val plain = dev.sidejit.core.crypto.ChaChaPoly.open(
                         session.keys.readKey,
-                        dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
+                        dev.sidejit.core.crypto.ChaChaPoly.rppairingNonce(0L),
                         reply.ciphertext,
                     )
                     JsonValue.parse(String(plain, Charsets.UTF_8))
