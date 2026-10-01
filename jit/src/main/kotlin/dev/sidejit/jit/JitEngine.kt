@@ -4,7 +4,6 @@ import dev.sidejit.coredevice.CoreDeviceTunnel
 import dev.sidejit.coredevice.RsdClient
 import dev.sidejit.coredevice.UserspaceTcp
 import dev.sidejit.developer.DebugProxy
-import dev.sidejit.developer.DvtClient
 import dev.sidejit.developer.GdbRemote
 import dev.sidejit.developer.ProcessControl
 import dev.sidejit.pairing.VerifiedSession
@@ -58,23 +57,51 @@ object JitEngine {
                         )
                     }
 
-                    DvtClient.connect(
+                    val processTcp = UserspaceTcp.connect(
                         tunnel.input,
                         tunnel.output,
                         tunnel.parameters,
-                        handshake,
-                    ).use { dvt ->
-                        val launch = dvt.launchSuspended(bundleId)
-                        val pid = launch.pid
-                        if (pid == null) {
-                            return Result.Failed(
-                                "DVT launchSuspended archive sent for $bundleId; " +
-                                    "no PID extracted from reply (${launch.rawHint}). " +
-                                    "RSD services=$serviceNames. Live device required for real PID.",
-                            )
-                        }
+                        pc.port,
+                    )
+                    try {
+                        DtxProcessControl(processTcp.input, processTcp.output).use { processControl ->
+                            val pid = processControl.launchSuspended(bundleId)
 
-                        // Try debugproxy / debugserver over userspace TCP.
+                            // Connect to the modern RSD debugproxy service and perform
+                            // the synchronous GDB attach/detach sequence.
+                            val debugSvc = handshake.service(ProcessControl.DEBUGPROXY)
+                                ?: handshake.service(ProcessControl.DEBUGSERVER)
+                                ?: handshake.services.firstOrNull {
+                                    it.name.contains("debugproxy", ignoreCase = true)
+                                }
+                            if (debugSvc == null) {
+                                return Result.Failed(
+                                    "ProcessControl launched pid=$pid for $bundleId but no " +
+                                        "debugproxy service is advertised (services=$serviceNames)",
+                                )
+                            }
+
+                            val debugTcp = UserspaceTcp.connect(
+                                tunnel.input,
+                                tunnel.output,
+                                tunnel.parameters,
+                                debugSvc.port,
+                            )
+                            try {
+                                DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
+                                Result.Granted(bundleId, pid)
+                            } catch (gdbFail: Exception) {
+                                Result.Failed(
+                                    "pid=$pid for $bundleId; debugproxy open ok on port " +
+                                        debugSvc.port + " but GDB sequence failed: " + gdbFail.message,
+                                )
+                            } finally {
+                                runCatching { debugTcp.close() }
+                            }
+                        }
+                    } finally {
+                        runCatching { processTcp.close() }
+                    }
                         val debugSvc = handshake.service(ProcessControl.DEBUGPROXY)
                             ?: handshake.service(ProcessControl.DEBUGSERVER)
                             ?: handshake.services.firstOrNull {
@@ -142,12 +169,12 @@ object JitEngine {
     fun describeStack(): String = buildString {
         appendLine("pair-setup/verify: code present")
         appendLine("TLS-PSK + CDTunnel: code present")
-        appendLine("userspace TCP (client, IPv6, length-prefixed): code present")
+        appendLine("userspace TCP (client, IPv6, raw-packet CDTunnel framing): code present")
         appendLine("RSD parse + client: code present")
         appendLine("RemoteXPC HTTP/2 frames: code present")
         appendLine("NSKeyedArchive encoder (DVT method calls): code present")
         appendLine("ProcessControl launch archive: code present")
-        appendLine("DvtClient (RemoteXPC + archive send + best-effort PID scrape): code present")
+        appendLine("DTX ProcessControl + NSKeyedArchive launch: code present")
         appendLine("debugproxy + GDB attach sequence: code present")
         appendLine("live device validation: none")
     }
