@@ -10,6 +10,7 @@ import dev.sidejit.core.net.Interfaces
 import dev.sidejit.jit.JitEngine
 import dev.sidejit.pairing.HostIdentity
 import dev.sidejit.pairing.PairableHostListener
+import dev.sidejit.pairing.PairVerifyClient
 import dev.sidejit.pairing.VerifiedSession
 import dev.sidejit.server.LocalHttpApi
 import kotlinx.coroutines.CoroutineScope
@@ -72,8 +73,49 @@ class ServerRuntime private constructor(private val context: Context) {
             _state.update {
                 it.copy(
                     device = Stage("Paired iOS device", StageStatus.READY, "${record.peer.name} @ $peerHost"),
-                    pairing = Stage("Wireless pairing", StageStatus.READY, "waiting for a device"),
+                    pairing = Stage("Wireless pairing", StageStatus.READY, "pair-setup complete; starting host-side pair-verify"),
+                    tunnel = Stage("CoreDevice tunnel", StageStatus.RUNNING, "connecting to iPhone _remotepairing._tcp"),
                 )
+            }
+            scope.launch {
+                try {
+                    val result = PairVerifyClient.connect(
+                        host = peerHost,
+                        port = REMOTE_PAIRING_DEFAULT_PORT,
+                        identity = host,
+                        record = record,
+                    )
+                    lastVerified.set(result.session)
+                    lastPeerHost.set(peerHost)
+                    lastListenerPort.set(result.listenerPort)
+                    _state.update {
+                        it.copy(
+                            device = Stage(
+                                "Paired iOS device",
+                                StageStatus.READY,
+                                "${record.peer.name} (verified) @ $peerHost",
+                            ),
+                            tunnel = Stage(
+                                "CoreDevice tunnel",
+                                StageStatus.READY,
+                                "createListener port ${result.listenerPort} on $peerHost",
+                            ),
+                            jit = Stage("JIT", StageStatus.IDLE, "ready to attempt /launch"),
+                        )
+                    }
+                    Log.i(LogTag.SERVER, "host-side pair-verify + createListener succeeded for ${record.peer.name}")
+                } catch (failure: Exception) {
+                    _state.update {
+                        it.copy(
+                            tunnel = Stage(
+                                "CoreDevice tunnel",
+                                StageStatus.FAILED,
+                                "host-side pair-verify failed: ${failure.message ?: failure.javaClass.simpleName}",
+                            ),
+                        )
+                    }
+                    Log.e(LogTag.SERVER, "host-side pair-verify failed for ${record.peer.name}", failure)
+                }
             }
         }
         pairing.onVerified = { session, peerHost ->
@@ -309,6 +351,7 @@ class ServerRuntime private constructor(private val context: Context) {
     companion object {
         const val PAIRABLE_HOST_SERVICE_TYPE: String = "_remotepairing-pairable-host._tcp"
         const val HTTP_SERVICE_TYPE: String = "_http._tcp"
+        const val REMOTE_PAIRING_DEFAULT_PORT: Int = 49152
 
         @Volatile
         private var instance: ServerRuntime? = null
