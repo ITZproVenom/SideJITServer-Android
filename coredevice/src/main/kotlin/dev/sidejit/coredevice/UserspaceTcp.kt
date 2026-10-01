@@ -137,7 +137,7 @@ object UserspaceTcp {
             System.arraycopy(remote.address, 0, packet, 24, 16)
             System.arraycopy(tcp, 0, packet, IPV6_HEADER, tcp.size)
             System.arraycopy(payload, 0, packet, IPV6_HEADER + tcp.size, payload.size)
-            TunnelDataPlane.writeLengthPrefixed(tunnelOut, packet)
+            TunnelDataPlane.writePacket(tunnelOut, packet)
         }
 
         private data class Segment(val seq: Int, val ack: Int, val flags: Int, val window: Int, val payload: ByteArray)
@@ -146,7 +146,7 @@ object UserspaceTcp {
             while (true) {
                 val packet = try {
                     if (!allowBlock && tunnelIn.available() == 0) return null
-                    TunnelDataPlane.readLengthPrefixed(tunnelIn)
+                    TunnelDataPlane.readPacket(tunnelIn)
                 } catch (e: EOFException) {
                     closed.set(true)
                     return null
