@@ -130,28 +130,23 @@ class PairableHostListener(
      */
     private fun tryCreateListener(stream: RpPairingStream, session: VerifiedSession, peerHost: String) {
         try {
+            // Post-verify RPPairing requests are encrypted with ClientEncrypt-main.
+            // The encrypted sequence number starts at zero for this direction.
             val keyB64 = Base64.getEncoder().encodeToString(session.sharedSecret)
             val request = JsonValue.parse(
-                """{"request":{"_0":{"createListener":{"key":"$keyB64","peerConnectionsInfo":[{"owningPID":1,"owningProcessName":"SideJITServer"}],"transportProtocolType":"tcp"}}}}""",
+                """{"request":{"_0":{"createListener":{"key":"$keyB64","transportProtocolType":"tcp"}}}}""",
             )
-            val sealed = try {
-                val writeKey = session.keys.writeKey
-                dev.sidejit.core.crypto.ChaChaPoly.seal(
-                    writeKey,
-                    dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
-                    request.encode().toByteArray(Charsets.UTF_8),
-                )
-            } catch (_: Exception) {
-                null
-            }
-            if (sealed != null) {
-                stream.sendEncrypted(sealed)
-            } else {
-                stream.sendPlain(request)
-            }
+            val sealed = dev.sidejit.core.crypto.ChaChaPoly.seal(
+                session.keys.writeKey,
+                dev.sidejit.core.crypto.ChaChaPoly.nonce(0L),
+                request.encode().toByteArray(Charsets.UTF_8),
+            )
+            stream.sendEncrypted(sealed)
+
             val reply = stream.receive()
             val json = when (reply) {
-                is RpMessage.Plain -> reply.value
+                is RpMessage.Plain ->
+                    throw RpProtocolException("createListener reply was unexpectedly unencrypted")
                 is RpMessage.Encrypted -> {
                     val plain = dev.sidejit.core.crypto.ChaChaPoly.open(
                         session.keys.readKey,
@@ -181,7 +176,6 @@ class PairableHostListener(
             onTunnelFailure(reason)
         }
     }
-
     companion object {
         private const val BACKLOG = 4
         const val SESSION_TIMEOUT_MILLIS: Int = 180_000
