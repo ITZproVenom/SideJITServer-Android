@@ -19,6 +19,7 @@ object Http2 {
     const val FRAME_HEADERS = 0x1
     const val FRAME_SETTINGS = 0x4
     const val FRAME_WINDOW_UPDATE = 0x8
+    const val FRAME_PING = 0x6
     const val FRAME_CONTINUATION = 0x9
 
     const val FLAG_END_STREAM = 0x1
@@ -126,8 +127,9 @@ class H2Connection(
     private val input: InputStream,
     private val output: OutputStream,
 ) : AutoCloseable {
-    private val bufferedData = java.util.ArrayDeque<ByteArray>()
+    private val bufferedData = java.util.ArrayDeque<Pair<Int, ByteArray>>()
     private val openedStreams = mutableSetOf<Int>()
+    private var xpcPending = ByteArray(0)
     private var connected = false
 
     fun connect() {
@@ -150,7 +152,7 @@ class H2Connection(
                     }
                 }
                 Http2.FRAME_DATA -> {
-                    if (frame.streamId != 0) bufferedData.add(frame.payload)
+                    if (frame.streamId != 0) bufferedData.add(frame.streamId to frame.payload)
                 }
                 else -> Unit
             }
@@ -159,25 +161,33 @@ class H2Connection(
 
     fun readXpcMessage(streamId: Int = 1): XpcCodec.Message {
         connect()
-        val pending = ByteArrayOutputStream()
         while (true) {
             while (bufferedData.isNotEmpty()) {
-                pending.write(bufferedData.removeFirst())
-                decodeComplete(pending.toByteArray())?.let { return it }
+                val (id, payload) = bufferedData.removeFirst()
+                if (id == streamId) {
+                    xpcPending += payload
+                    takeCompleteMessage()?.let { return it }
+                }
             }
 
             val frame = Http2.readFrame(input)
             when (frame.type) {
                 Http2.FRAME_DATA -> {
                     if (frame.streamId == streamId) {
-                        pending.write(frame.payload)
-                        decodeComplete(pending.toByteArray())?.let { return it }
+                        xpcPending += frame.payload
+                        takeCompleteMessage()?.let { return it }
                     }
                 }
                 Http2.FRAME_SETTINGS -> {
                     if (frame.flags and Http2.FLAG_ACK == 0) {
                         require(frame.streamId == 0) { "HTTP/2 SETTINGS must use stream 0" }
                         output.write(Http2.settingsFrame(ack = true))
+                        output.flush()
+                    }
+                }
+                Http2.FRAME_PING -> {
+                    if (frame.flags and Http2.FLAG_ACK == 0 && frame.payload.size == 8) {
+                        output.write(Http2.encodeFrame(Http2.FRAME_PING, Http2.FLAG_ACK, 0, frame.payload))
                         output.flush()
                     }
                 }
@@ -216,14 +226,15 @@ class H2Connection(
         output.write(Http2.encodeFrame(Http2.FRAME_HEADERS, Http2.FLAG_END_HEADERS, streamId, ByteArray(0)))
     }
 
-    private fun decodeComplete(bytes: ByteArray): XpcCodec.Message? {
-        if (bytes.size < 24) return null
-        val bodyLength = littleEndianLong(bytes, 8)
+    private fun takeCompleteMessage(): XpcCodec.Message? {
+        if (xpcPending.size < 24) return null
+        val bodyLength = littleEndianLong(xpcPending, 8)
         require(bodyLength in 0..(8L * 1024 * 1024)) { "XPC body length exceeds limit" }
         val total = 24L + bodyLength
-        if (bytes.size.toLong() < total) return null
-        require(bytes.size.toLong() == total) { "multiple XPC messages on one RSD read are not retained" }
-        return XpcCodec.decode(bytes)
+        if (xpcPending.size.toLong() < total) return null
+        val messageBytes = xpcPending.copyOfRange(0, total.toInt())
+        xpcPending = xpcPending.copyOfRange(total.toInt(), xpcPending.size)
+        return XpcCodec.decode(messageBytes)
     }
 
     private fun littleEndianLong(bytes: ByteArray, offset: Int): Long {
