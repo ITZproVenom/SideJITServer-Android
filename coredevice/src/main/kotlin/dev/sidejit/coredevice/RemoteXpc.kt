@@ -113,3 +113,158 @@ object RemoteXpc {
         output.flush()
     }
 }
+
+
+/**
+ * Synchronous HTTP/2 transport used by CoreDevice RemoteXPC/RSD.
+ *
+ * The transport is intentionally small: RSD needs the connection preface,
+ * SETTINGS exchange, and DATA frames on stream 1; RemoteXPC services then use
+ * the same XPC message codec over the same framing.
+ */
+class H2Connection(
+    private val input: InputStream,
+    private val output: OutputStream,
+) : AutoCloseable {
+    private val bufferedData = java.util.ArrayDeque<ByteArray>()
+    private val openedStreams = mutableSetOf<Int>()
+    private var connected = false
+
+    fun connect() {
+        if (connected) return
+        output.write(Http2.CLIENT_PREFACE)
+        output.write(settingsFrame())
+        output.write(windowUpdateFrame(0, 16 * 1024 * 1024 - 65_535))
+        output.flush()
+
+        while (true) {
+            val frame = Http2.readFrame(input)
+            when (frame.type) {
+                Http2.FRAME_SETTINGS -> {
+                    if (frame.flags and Http2.FLAG_ACK == 0) {
+                        require(frame.streamId == 0) { "HTTP/2 SETTINGS must use stream 0" }
+                        output.write(Http2.settingsFrame(ack = true))
+                        output.flush()
+                        connected = true
+                        return
+                    }
+                }
+                Http2.FRAME_DATA -> {
+                    if (frame.streamId != 0) bufferedData.add(frame.payload)
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    fun readXpcMessage(streamId: Int = 1): XpcCodec.Message {
+        connect()
+        val pending = ByteArrayOutputStream()
+        while (true) {
+            while (bufferedData.isNotEmpty()) {
+                pending.write(bufferedData.removeFirst())
+                decodeComplete(pending.toByteArray())?.let { return it }
+            }
+
+            val frame = Http2.readFrame(input)
+            when (frame.type) {
+                Http2.FRAME_DATA -> {
+                    if (frame.streamId == streamId) {
+                        pending.write(frame.payload)
+                        decodeComplete(pending.toByteArray())?.let { return it }
+                    }
+                }
+                Http2.FRAME_SETTINGS -> {
+                    if (frame.flags and Http2.FLAG_ACK == 0) {
+                        require(frame.streamId == 0) { "HTTP/2 SETTINGS must use stream 0" }
+                        output.write(Http2.settingsFrame(ack = true))
+                        output.flush()
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    fun writeXpcMessage(message: XpcCodec.Message, streamId: Int = 1, endStream: Boolean = false) {
+        connect()
+        openStream(streamId)
+        val bytes = XpcCodec.encode(message)
+        var offset = 0
+        while (offset < bytes.size) {
+            val length = minOf(16_384, bytes.size - offset)
+            val end = offset + length == bytes.size && endStream
+            output.write(
+                Http2.encodeFrame(
+                    Http2.FRAME_DATA,
+                    if (end) Http2.FLAG_END_STREAM else 0,
+                    streamId,
+                    bytes.copyOfRange(offset, offset + length),
+                ),
+            )
+            offset += length
+        }
+        if (bytes.isEmpty() && endStream) {
+            output.write(Http2.encodeFrame(Http2.FRAME_DATA, Http2.FLAG_END_STREAM, streamId, ByteArray(0)))
+        }
+        output.flush()
+    }
+
+    private fun openStream(streamId: Int) {
+        require(streamId > 0 && streamId <= 0x7FFF_FFFF) { "invalid HTTP/2 stream id" }
+        if (!openedStreams.add(streamId)) return
+        output.write(Http2.encodeFrame(Http2.FRAME_HEADERS, Http2.FLAG_END_HEADERS, streamId, ByteArray(0)))
+    }
+
+    private fun decodeComplete(bytes: ByteArray): XpcCodec.Message? {
+        if (bytes.size < 24) return null
+        val bodyLength = littleEndianLong(bytes, 8)
+        require(bodyLength in 0..(8L * 1024 * 1024)) { "XPC body length exceeds limit" }
+        val total = 24L + bodyLength
+        if (bytes.size.toLong() < total) return null
+        require(bytes.size.toLong() == total) { "multiple XPC messages on one RSD read are not retained" }
+        return XpcCodec.decode(bytes)
+    }
+
+    private fun littleEndianLong(bytes: ByteArray, offset: Int): Long {
+        var value = 0L
+        for (i in 0 until 8) {
+            value = value or ((bytes[offset + i].toLong() and 0xFF) shl (8 * i))
+        }
+        return value
+    }
+
+    private fun settingsFrame(): ByteArray {
+        val payload = ByteArrayOutputStream()
+        writeU16(payload, 0x0003); writeU32(payload, 100)
+        writeU16(payload, 0x0004); writeU32(payload, 16 * 1024 * 1024)
+        return Http2.encodeFrame(Http2.FRAME_SETTINGS, 0, 0, payload.toByteArray())
+    }
+
+    private fun windowUpdateFrame(streamId: Int, increment: Int): ByteArray {
+        require(increment in 1..0x7FFF_FFFF)
+        val payload = ByteArray(4)
+        payload[0] = ((increment ushr 24) and 0x7F).toByte()
+        payload[1] = ((increment ushr 16) and 0xFF).toByte()
+        payload[2] = ((increment ushr 8) and 0xFF).toByte()
+        payload[3] = (increment and 0xFF).toByte()
+        return Http2.encodeFrame(Http2.FRAME_WINDOW_UPDATE, 0, streamId, payload)
+    }
+
+    private fun writeU16(out: ByteArrayOutputStream, value: Int) {
+        out.write((value ushr 8) and 0xFF)
+        out.write(value and 0xFF)
+    }
+
+    private fun writeU32(out: ByteArrayOutputStream, value: Int) {
+        out.write((value ushr 24) and 0xFF)
+        out.write((value ushr 16) and 0xFF)
+        out.write((value ushr 8) and 0xFF)
+        out.write(value and 0xFF)
+    }
+
+    override fun close() {
+        runCatching { input.close() }
+        runCatching { output.close() }
+    }
+}
