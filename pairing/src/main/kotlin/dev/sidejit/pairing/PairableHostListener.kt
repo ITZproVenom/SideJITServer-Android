@@ -27,6 +27,7 @@ class PairableHostListener(
     var onVerified: (VerifiedSession, String) -> Unit = { _, _ -> }
     /** peerHost, listenerPort from createListener if obtained on this connection */
     var onTunnelListener: (String, Int) -> Unit = { _, _ -> }
+    var onTunnelFailure: (String) -> Unit = {}
     var onFailure: (String) -> Unit = {}
 
     private val running = AtomicBoolean(false)
@@ -162,14 +163,22 @@ class PairableHostListener(
             }
             val port = json.path("createListener", "port")?.asLong
                 ?: json.path("response", "_0", "createListener", "port")?.asLong
-            if (port != null) {
+            if (port != null && port in 1..65535) {
                 Log.i(LogTag.PAIRING, "createListener returned port $port for $peerHost")
                 onTunnelListener(peerHost, port.toInt())
             } else {
-                Log.w(LogTag.PAIRING, "createListener reply had no port: ${json.encode().take(200)}")
+                val reason = if (port == null) {
+                    "createListener reply had no port: ${json.encode().take(200)}"
+                } else {
+                    "createListener returned invalid port $port"
+                }
+                Log.w(LogTag.PAIRING, reason)
+                onTunnelFailure(reason)
             }
         } catch (failure: Exception) {
-            Log.w(LogTag.PAIRING, "createListener after verify failed: ${failure.describe()}")
+            val reason = "createListener after verify failed: ${failure.message ?: failure.javaClass.simpleName}"
+            Log.w(LogTag.PAIRING, "$reason (${failure.describe()})")
+            onTunnelFailure(reason)
         }
     }
 
