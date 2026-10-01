@@ -26,6 +26,8 @@ dependencies {
     api(project(":core:crypto"))
     api(project(":pairing"))
     api(project(":server"))
+    api(project(":jit"))
+    api(project(":coredevice"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
