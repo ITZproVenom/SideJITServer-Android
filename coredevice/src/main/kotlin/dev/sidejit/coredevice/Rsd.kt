@@ -119,10 +119,10 @@ class RsdClient(
                 val service = rawService as? XpcCodec.Value.DictionaryValue ?: continue
                 val port: Int = when (val rawPort = service.entries["Port"]) {
                     is XpcCodec.Value.StringValue -> rawPort.value.toIntOrNull() ?: continue
-                    is XpcCodec.Value.UInt64Value -> rawPort.value.toIntOrNullOrNull()
-                    is XpcCodec.Value.Int64Value -> rawPort.value.toInt().takeIf { rawPort.value in 1..65535 }
-                    else -> null
-                } ?: continue
+                    is XpcCodec.Value.UInt64Value -> rawPort.value.toInt().takeIf { rawPort.value in 1..65535 } ?: continue
+                    is XpcCodec.Value.Int64Value -> rawPort.value.toInt().takeIf { rawPort.value in 1..65535 } ?: continue
+                    else -> continue
+                }
                 if (port !in 1..65535) continue
 
                 val serviceProperties = service.entries["Properties"] as? XpcCodec.Value.DictionaryValue
