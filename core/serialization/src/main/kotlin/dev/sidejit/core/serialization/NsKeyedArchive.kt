@@ -30,48 +30,6 @@ object NsKeyedArchive {
 
     fun encode(root: Value): ByteArray = writeBplist(root)
 
-    /** Decode a root integer from a binary plist response produced by CoreDevice DTX. */
-    fun readRootInteger(bytes: ByteArray): Long {
-        require(bytes.size >= 40) { "binary plist is truncated" }
-        require(String(bytes, 0, 8, Charsets.US_ASCII) == MAGIC) { "not a binary plist" }
-
-        val trailer = bytes.size - 32
-        val offsetSize = bytes[trailer + 6].toInt() and 0xFF
-        val refSize = bytes[trailer + 7].toInt() and 0xFF
-        val objectCount = readUnsigned(bytes, trailer + 8, 8)
-        val topObject = readUnsigned(bytes, trailer + 16, 8)
-        val offsetTable = readUnsigned(bytes, trailer + 24, 8)
-        require(offsetSize in 1..8 && refSize in 1..8) { "invalid binary plist sizes" }
-        require(objectCount in 1..1_000_000 && topObject < objectCount) { "invalid binary plist object count" }
-        require(offsetTable in 8 until trailer) { "invalid binary plist offset table" }
-
-        val offsetPos = offsetTable + topObject * offsetSize
-        require(offsetPos + offsetSize <= trailer) { "binary plist root offset is outside the table" }
-        val objectOffset = readUnsigned(bytes, offsetPos.toInt(), offsetSize)
-        require(objectOffset in 8 until trailer) { "binary plist root object is out of range" }
-
-        val marker = bytes[objectOffset.toInt()].toInt() and 0xFF
-        require(marker in 0x10..0x13) { "binary plist root is not an integer: 0x    fun encode(root: Value): ByteArray = writeBplist(root)
-" }
-        val length = 1 shl (marker and 0x0F)
-        require(length in 1..8) { "unsupported binary plist integer width $length" }
-        require(objectOffset + 1 + length <= trailer) { "binary plist integer is truncated" }
-        var value = 0L
-        for (i in 0 until length) {
-            value = (value shl 8) or (bytes[objectOffset.toInt() + 1 + i].toLong() and 0xFF)
-        }
-        return value
-    }
-
-    private fun readUnsigned(bytes: ByteArray, offset: Int, count: Int): Long {
-        require(count in 1..8 && offset >= 0 && offset + count <= bytes.size) { "invalid unsigned integer range" }
-        var value = 0L
-        for (i in 0 until count) {
-            value = (value shl 8) or (bytes[offset + i].toLong() and 0xFF)
-        }
-        return value
-    }
-
     fun methodInvocation(selector: String, namedArgs: Map<String, Value>): ByteArray {
         val argsArray = array(namedArgs.map { (name, value) ->
             dict("name" to text(name), "value" to value)
