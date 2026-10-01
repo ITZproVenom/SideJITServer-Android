@@ -80,33 +80,77 @@ class RsdClient(
     private val input: InputStream,
     private val output: OutputStream,
 ) {
+    /** RSD on modern CoreDevice is RemoteXPC over HTTP/2, not raw length-prefixed JSON. */
     fun readHandshake(): Rsd.Handshake {
-        // Prefer 4-byte BE length prefix then JSON body.
-        val header = ByteArray(4)
-        var n = 0
-        while (n < 4) {
-            val r = input.read(header, n, 4 - n)
-            if (r < 0) throw Rsd.RsdException("EOF reading RSD header")
-            n += r
+        val h2 = H2Connection(input, output)
+        val message = h2.readXpcMessage(streamId = 1)
+        return parseXpcHandshake(message)
+    }
+
+    private fun parseXpcHandshake(message: XpcCodec.Message): Rsd.Handshake {
+        val root = message.body as? XpcCodec.Value.DictionaryValue
+            ?: throw Rsd.RsdException("RSD XPC handshake body is not a dictionary")
+
+        val type = root.entries["MessageType"] as? XpcCodec.Value.StringValue
+            ?: throw Rsd.RsdException("RSD handshake is missing MessageType")
+        if (type.value != "Handshake") {
+            throw Rsd.RsdException("unexpected RSD message type: " + type.value)
         }
-        val size = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
-        val body = if (size in 2..1_000_000 && header[0] != '{'.code.toByte()) {
-            val buf = ByteArray(size)
-            var read = 0
-            while (read < size) {
-                val r = input.read(buf, read, size - read)
-                if (r < 0) throw Rsd.RsdException("EOF reading RSD body")
-                read += r
+
+        val properties = root.entries["Properties"] as? XpcCodec.Value.DictionaryValue
+            ?: throw Rsd.RsdException("RSD handshake is missing Properties")
+        val udid = (properties.entries["UniqueDeviceID"] as? XpcCodec.Value.StringValue)?.value
+            ?: throw Rsd.RsdException("RSD handshake is missing UniqueDeviceID")
+
+        val services = linkedMapOf<String, Rsd.Service>()
+        val serviceDict = root.entries["Services"] as? XpcCodec.Value.DictionaryValue
+        if (serviceDict != null) {
+            for ((name, rawService) in serviceDict.entries) {
+                val service = rawService as? XpcCodec.Value.DictionaryValue ?: continue
+                val port = when (val rawPort = service.entries["Port"]) {
+                    is XpcCodec.Value.StringValue -> rawPort.value.toIntOrNull()
+                    is XpcCodec.Value.UInt64Value -> rawPort.value.toInt().takeIf { rawPort.value in 1..65535 }
+                    is XpcCodec.Value.Int64Value -> rawPort.value.toInt().takeIf { rawPort.value in 1..65535 }
+                    else -> null
+                }
+                if (port !in 1..65535) continue
+
+                val serviceProperties = service.entries["Properties"] as? XpcCodec.Value.DictionaryValue
+                val usesRemoteXpc =
+                    (serviceProperties?.entries?.get("UsesRemoteXPC") as? XpcCodec.Value.Bool)?.value == true
+
+                services[name] = Rsd.Service(
+                    name = name,
+                    port = port,
+                    entitlement = (service.entries["Entitlement"] as? XpcCodec.Value.StringValue)?.value,
+                    usesRemoteXpc = usesRemoteXpc,
+                )
             }
-            buf
-        } else {
-            // Not a length prefix — treat accumulated + rest as JSON starting with {
-            val rest = input.readBytes()
-            header + rest
         }
-        val text = String(body, Charsets.UTF_8).trim()
-        val start = text.indexOf('{')
-        if (start < 0) throw Rsd.RsdException("RSD body is not JSON")
-        return Rsd.parseHandshake(JsonValue.parse(text.substring(start)))
+
+        val protocolVersion = when (val version = root.entries["MessagingProtocolVersion"]) {
+            is XpcCodec.Value.UInt64Value -> version.value.toInt()
+            is XpcCodec.Value.Int64Value -> version.value.toInt()
+            is XpcCodec.Value.StringValue -> version.value.toIntOrNull() ?: 0
+            else -> 0
+        }
+
+        return Rsd.Handshake(
+            uuid = (root.entries["UUID"] as? XpcCodec.Value.StringValue)?.value,
+            protocolVersion = protocolVersion,
+            services = services.values.toList(),
+            properties = properties.entries.mapNotNull { (key, value) ->
+                val text = when (value) {
+                    is XpcCodec.Value.StringValue -> value.value
+                    is XpcCodec.Value.UInt64Value -> value.value.toString()
+                    is XpcCodec.Value.Int64Value -> value.value.toString()
+                    is XpcCodec.Value.Bool -> value.value.toString()
+                    else -> null
+                }
+                text?.let { key to it }
+            }.toMap(),
+        ).also {
+            require(udid.isNotBlank()) { "RSD UniqueDeviceID is blank" }
+        }
     }
 }
