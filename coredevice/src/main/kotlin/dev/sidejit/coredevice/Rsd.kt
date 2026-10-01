@@ -83,8 +83,18 @@ class RsdClient(
     /** RSD on modern CoreDevice is RemoteXPC over HTTP/2, not raw length-prefixed JSON. */
     fun readHandshake(): Rsd.Handshake {
         val h2 = H2Connection(input, output)
-        val message = h2.readXpcMessage(streamId = 1)
-        return parseXpcHandshake(message)
+        var lastError: Exception? = null
+        repeat(6) {
+            val message = h2.readXpcMessage(streamId = 1)
+            try {
+                return parseXpcHandshake(message)
+            } catch (failure: Rsd.RsdException) {
+                lastError = failure
+            }
+        }
+        throw Rsd.RsdException(
+            "RSD handshake message was not found after six XPC messages: " + (lastError?.message ?: "unknown error"),
+        )
     }
 
     private fun parseXpcHandshake(message: XpcCodec.Message): Rsd.Handshake {
