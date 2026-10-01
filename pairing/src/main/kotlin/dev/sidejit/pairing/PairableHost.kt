@@ -214,21 +214,18 @@ class PairableHost(
         peer: PeerDevice,
     ) {
         val signature = Tlv8.value(entries, PairingComponent.SIGNATURE)
-        if (signature.isEmpty()) {
-            Log.w(LogTag.PAIRING, "the device identity carried no signature")
-            return
+        if (signature.size != Ed25519.SIGNATURE_BYTES) {
+            throw RpProtocolException("pair setup device identity signature missing or malformed")
+        }
+        if (peer.longTermPublicKey.size != Ed25519.PUBLIC_KEY_BYTES) {
+            throw RpProtocolException("pair setup device long term key is not an Ed25519 public key")
         }
         val deviceX = derive(sessionKey, DEVICE_SIGN_SALT, DEVICE_SIGN_INFO)
         val signed = deviceX + peer.identifier.toByteArray(Charsets.UTF_8) + peer.longTermPublicKey
-        if (peer.longTermPublicKey.size != Ed25519.PUBLIC_KEY_BYTES) {
-            Log.w(LogTag.PAIRING, "the device long term key is not an Ed25519 key")
-            return
+        if (!Ed25519.verify(peer.longTermPublicKey, signed, signature)) {
+            throw RpProtocolException("pair setup device identity signature did not verify")
         }
-        if (Ed25519.verify(peer.longTermPublicKey, signed, signature)) {
-            Log.d(LogTag.PAIRING, "the device identity signature checks out")
-        } else {
-            Log.w(LogTag.PAIRING, "the device identity signature did not verify")
-        }
+        Log.d(LogTag.PAIRING, "the device identity signature checks out")
     }
 
     private fun derive(sessionKey: ByteArray, salt: String, info: String): ByteArray =
