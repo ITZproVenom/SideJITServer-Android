@@ -89,4 +89,32 @@ class PairableHostTest {
             assertEquals(1, store.all().size)
         }
     }
+
+    @Test
+    fun `pinless pairing skips the code exchange`() {
+        val pinlessIdentity = HostIdentity.generate(name = "SideJIT pinless")
+        val pinlessStore = InMemoryPairingStore()
+        val pinlessListener = PairableHostListener(pinlessIdentity, pinlessStore, pinless = true)
+        val pinlessPaired = CountDownLatch(1)
+        pinlessListener.onPaired = { _, _ -> pinlessPaired.countDown() }
+        pinlessListener.start()
+        try {
+            val socket = Socket(InetAddress.getLoopbackAddress(), pinlessListener.port)
+            socket.soTimeout = 20_000
+            socket.use {
+                val stream = RpPairingStream(
+                    BufferedInputStream(socket.getInputStream()),
+                    BufferedOutputStream(socket.getOutputStream()),
+                    RpPairingStream.INITIATOR_ROLE,
+                )
+                val probe = TestDevice(stream, setupCode = "000000")
+                probe.handshake()
+                probe.completePairSetup()
+                assertTrue(pinlessPaired.await(20, TimeUnit.SECONDS))
+                assertEquals(1, pinlessStore.all().size)
+            }
+        } finally {
+            pinlessListener.stop()
+        }
+    }
 }
