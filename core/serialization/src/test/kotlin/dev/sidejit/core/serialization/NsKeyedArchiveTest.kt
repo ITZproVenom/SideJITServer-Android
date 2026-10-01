@@ -22,6 +22,11 @@ class NsKeyedArchiveTest {
         assertEquals("bplist00", String(archive, 0, 8, Charsets.US_ASCII))
     }
     @Test fun emptyDict() { assertTrue(NsKeyedArchive.encode(NsKeyedArchive.dict()).size > 8) }
+
+    @Test fun rootIntegerRoundTripsThroughKeyedArchive() {
+        val archive = NsKeyedArchive.encode(NsKeyedArchive.integer(4242))
+        assertEquals(4242L, NsKeyedArchive.readRootInteger(archive))
+    }
     @Test fun nestedArrayAndBool() {
         val bytes = NsKeyedArchive.encode(NsKeyedArchive.dict(
             "arr" to NsKeyedArchive.array(NsKeyedArchive.bool(true), NsKeyedArchive.integer(42), NsKeyedArchive.text("hi")),
