@@ -110,6 +110,15 @@ class ServerRuntime private constructor(private val context: Context) {
             }
             Log.i(LogTag.SERVER, "tunnel listener $peerHost:$listenerPort")
         }
+        pairing.onTunnelFailure = { reason ->
+            lastListenerPort.set(null)
+            _state.update {
+                it.copy(
+                    tunnel = Stage("CoreDevice tunnel", StageStatus.FAILED, reason.take(180)),
+                    jit = Stage("JIT", StageStatus.IDLE, "needs live tunnel + createListener"),
+                )
+            }
+        }
         pairing.onFailure = { reason ->
             _state.update {
                 it.copy(pairing = Stage("Wireless pairing", StageStatus.RUNNING, "last attempt failed: $reason"))
