@@ -14,8 +14,10 @@ import org.bouncycastle.tls.TlsClientProtocol
 import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto
 
 /**
- * TLS 1.2 client using [CipherSuite.TLS_PSK_WITH_AES_256_GCM_SHA384] (0x00A9),
- * the suite Apple's CoreDevice TCP tunnel expects on modern iOS.
+ * TLS 1.2 client for Apple's CoreDevice PSK tunnel.
+ *
+ * iOS CoreDevice negotiates the legacy PSK CBC suites here, normally
+ * TLS_PSK_WITH_AES_256_CBC_SHA384 (0x00AF), with AES-128-CBC-SHA fallback.
  *
  * Uses Bouncy Castle's non-JSSE TLS API because Android's SSLEngine does not
  * expose pure-PSK cipher suites.
@@ -40,7 +42,10 @@ class TlsPskClient(
                 ProtocolVersion.TLSv12.only()
 
             override fun getSupportedCipherSuites(): IntArray =
-                intArrayOf(CipherSuite.TLS_PSK_WITH_AES_256_GCM_SHA384)
+                intArrayOf(
+                    CipherSuite.TLS_PSK_WITH_AES_256_CBC_SHA384,
+                    CipherSuite.TLS_PSK_WITH_AES_128_CBC_SHA,
+                )
         }
         val protocol = TlsClientProtocol(socket.getInputStream(), socket.getOutputStream())
         try {
