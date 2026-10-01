@@ -204,18 +204,21 @@ data class SessionKeys(
 
     companion object {
         fun fromSharedSecret(sharedSecret: ByteArray): SessionKeys {
+            // RPPairing's post-verify control channel uses an empty HKDF salt.
+            // The host encrypts outgoing messages with ClientEncrypt-main and
+            // decrypts incoming messages with ServerEncrypt-main.
             val read = Hkdf.derive(
                 Digest.SHA512,
-                "Control-Salt".toByteArray(Charsets.UTF_8),
+                ByteArray(0),
                 sharedSecret,
-                "Control-Read-Encryption-Key".toByteArray(Charsets.UTF_8),
+                "ServerEncrypt-main".toByteArray(Charsets.UTF_8),
                 32,
             )
             val write = Hkdf.derive(
                 Digest.SHA512,
-                "Control-Salt".toByteArray(Charsets.UTF_8),
+                ByteArray(0),
                 sharedSecret,
-                "Control-Write-Encryption-Key".toByteArray(Charsets.UTF_8),
+                "ClientEncrypt-main".toByteArray(Charsets.UTF_8),
                 32,
             )
             return SessionKeys(read, write)
