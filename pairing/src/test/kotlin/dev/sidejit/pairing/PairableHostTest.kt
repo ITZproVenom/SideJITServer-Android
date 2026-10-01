@@ -80,41 +80,43 @@ class PairableHostTest {
                     ?.asBool,
             )
 
-            val published = awaitCode()
-            probe.setupCode = published
-            probe.completePairSetup()
+            // Start pair setup far enough to learn the code, then finish with it.
+            probe.beginPairSetup()
+            val code = awaitCode()
+            assertEquals(6, code.length)
+            probe.completePairSetup(code)
 
-            assertTrue("pair did not complete", paired.await(20, TimeUnit.SECONDS))
+            assertTrue(paired.await(20, TimeUnit.SECONDS))
+            val record = store.all().single()
+            assertEquals(probe.identifier, record.peer.identifier)
+            assertEquals(probe.name, record.peer.name)
+            assertEquals(probe.model, record.peer.model)
+            assertEquals(probe.udid, record.peer.udid)
+            assertTrue(record.sessionKey.contentEquals(probe.sessionKey))
+            assertEquals(64, record.sessionKey.size)
+            assertTrue("the host signature should verify", probe.accessorySignatureValid)
+            assertEquals(identity.identifier, probe.accessoryIdentifier)
+            assertTrue(identity.longTermPublicKey.contentEquals(probe.accessoryPublicKey!!))
             assertTrue(failures.isEmpty())
-            assertEquals(1, store.all().size)
         }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
     }
 
     @Test
-    fun `pinless pairing skips the code exchange`() {
-        val pinlessIdentity = HostIdentity.generate(name = "SideJIT pinless")
-        val pinlessStore = InMemoryPairingStore()
-        val pinlessListener = PairableHostListener(pinlessIdentity, pinlessStore, pinless = true)
-        val pinlessPaired = CountDownLatch(1)
-        pinlessListener.onPaired = { _, _ -> pinlessPaired.countDown() }
-        pinlessListener.start()
-        try {
-            val socket = Socket(InetAddress.getLoopbackAddress(), pinlessListener.port)
-            socket.soTimeout = 20_000
-            socket.use {
-                val stream = RpPairingStream(
-                    BufferedInputStream(socket.getInputStream()),
-                    BufferedOutputStream(socket.getOutputStream()),
-                    RpPairingStream.INITIATOR_ROLE,
-                )
-                val probe = TestDevice(stream, setupCode = "000000")
-                probe.handshake()
-                probe.completePairSetup()
-                assertTrue(pinlessPaired.await(20, TimeUnit.SECONDS))
-                assertEquals(1, pinlessStore.all().size)
-            }
-        } finally {
-            pinlessListener.stop()
+    fun `a wrong code is answered with an authentication error and nothing is stored`() {
+        val (socket, stream) = connect()
+        socket.use {
+            val probe = TestDevice(stream, setupCode = "000000")
+            probe.handshake()
+            probe.beginPairSetup()
+            awaitCode()
+            probe.completePairSetupWithWrongProof()
+            val response = probe.receiveTlv()
+            assertEquals(4, Tlv8.byte(response, PairingComponent.STATE))
+            assertEquals(0x02, Tlv8.byte(response, PairingComponent.ERROR))
         }
+        assertTrue(finished.await(20, TimeUnit.SECONDS))
+        assertTrue(store.all().isEmpty())
+        assertFalse(failures.isEmpty())
     }
 }
