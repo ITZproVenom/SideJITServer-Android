@@ -11,17 +11,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Minimal HTTP server SideStore / LiveContainer-style clients can hit.
- *
- * GET  /           → status JSON
- * GET  /status     → status JSON
- * GET  /version    → version string
- * GET  /re/        → refresh/noop (SideStore cache)
- * POST /launch?bundleId=… → attempts JIT (fails until live device path works)
- * GET  /launch_app?bundle_id=… → same as launch (some clients use GET)
  */
 class LocalHttpApi(
     private val port: Int = 8080,
     private val bindAddress: InetAddress = InetAddress.getByName("0.0.0.0"),
+    private val statusProvider: () -> String = {
+        """{"ok":true,"jit":"not_ready","version":"0.1.0","stack":${jsonEscapeStatic(JitEngine.describeStack())}}"""
+    },
+    private val launchHandler: (String) -> JitEngine.Result = { JitEngine.enable(it) },
 ) {
     private val running = AtomicBoolean(false)
     private var server: ServerSocket? = null
@@ -80,25 +77,15 @@ class LocalHttpApi(
         val pathNorm = if (pathOnly.isEmpty()) "/" else pathOnly
         val query = path.substringAfter('?', "")
         return when {
-            method == "OPTIONS" ->
-                Triple("204 No Content", "", "text/plain")
-
+            method == "OPTIONS" -> Triple("204 No Content", "", "text/plain")
             method == "GET" && (pathNorm == "/" || pathNorm == "/status") ->
-                Triple(
-                    "200 OK",
-                    """{"ok":true,"jit":"not_ready","version":"0.1.0","stack":${jsonEscape(JitEngine.describeStack())}}""",
-                    "application/json",
-                )
-
+                Triple("200 OK", statusProvider(), "application/json")
             method == "GET" && pathNorm == "/version" ->
                 Triple("200 OK", "0.1.0", "text/plain; charset=utf-8")
-
             method == "GET" && (pathNorm == "/re" || pathNorm.startsWith("/re/")) ->
                 Triple("200 OK", """{"ok":true,"refreshed":true}""", "application/json")
-
             method == "POST" && pathNorm == "/launch" -> launch(query)
             method == "GET" && (pathNorm == "/launch" || pathNorm == "/launch_app") -> launch(query)
-
             else -> Triple(
                 "404 Not Found",
                 """{"ok":false,"error":"not found","path":${jsonEscape(pathNorm)}}""",
@@ -118,7 +105,7 @@ class LocalHttpApi(
             }
             .firstOrNull { it != null }
             ?: "unknown"
-        val result = JitEngine.enable(bundleId)
+        val result = launchHandler(bundleId)
         return when (result) {
             is JitEngine.Result.Granted ->
                 Triple("200 OK", """{"ok":true,"pid":${result.pid},"bundleId":${jsonEscape(bundleId)}}""", "application/json")
@@ -146,4 +133,22 @@ class LocalHttpApi(
             }
             append('"')
         }
+
+    companion object {
+        fun jsonEscapeStatic(text: String): String =
+            buildString {
+                append('"')
+                for (ch in text) {
+                    when (ch) {
+                        '"' -> append("\\\"")
+                        '\\' -> append("\\\\")
+                        '\n' -> append("\\n")
+                        '\r' -> append("\\r")
+                        '\t' -> append("\\t")
+                        else -> if (ch.code < 0x20) append("\\u%04x".format(ch.code)) else append(ch)
+                    }
+                }
+                append('"')
+            }
+    }
 }
