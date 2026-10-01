@@ -411,12 +411,5 @@ object NsKeyedArchive {
             return value
         }
 
-        private fun Int.checkedAdd(delta: Int): Int = checkedAddLong(delta.toLong()).toInt()
-        private fun checkedAddLong(delta: Long): Long = toLong().checkedAddLongInternal(delta)
-        private fun Long.checkedAddLongInternal(delta: Long): Long {
-            val result = this + delta
-            require((delta >= 0 && result >= this) || (delta < 0 && result <= this)) { "binary plist offset overflow" }
-            return result
-        }
     }
 }
