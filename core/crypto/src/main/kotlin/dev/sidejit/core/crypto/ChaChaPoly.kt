@@ -33,6 +33,15 @@ object ChaChaPoly {
         return nonce
     }
 
+    /** RPPairing control-channel nonce: [u64 sequence number LE][four zero bytes]. */
+    fun rppairingNonce(sequenceNumber: Long): ByteArray {
+        val nonce = ByteArray(NONCE_BYTES)
+        for (index in 0 until 8) {
+            nonce[index] = ((sequenceNumber ushr (8 * index)) and 0xFF).toByte()
+        }
+        return nonce
+    }
+
     fun seal(
         key: ByteArray,
         nonce: ByteArray,
