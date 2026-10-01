@@ -71,7 +71,7 @@ class HostIdentity(
 
         /** The protocol version iOS 26 and 27 speak in the remote pairing handshake. */
         const val WIRE_PROTOCOL_VERSION: Int = 26
-        const val MINIMUM_WIRE_PROTOCOL_VERSION: Int = 17
+        const val MINIMUM_WIRE_PROTOCOL_VERSION: Int = 8
 
         private const val FORMAT_VERSION = 1
 
