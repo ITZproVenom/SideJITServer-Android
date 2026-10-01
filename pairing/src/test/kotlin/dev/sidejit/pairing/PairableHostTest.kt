@@ -80,23 +80,70 @@ class PairableHostTest {
                     ?.asBool,
             )
 
-            val published = awaitCode()
-            probe.setupCode = published
-            probe.completePairSetup()
+            probe.beginPairSetup()
+            val code = awaitCode()
+            assertEquals(6, code.length)
+            probe.completePairSetup(code)
 
-            assertTrue("pair did not complete", paired.await(20, TimeUnit.SECONDS))
+            assertTrue(paired.await(20, TimeUnit.SECONDS))
+            val record = store.all().single()
+            assertEquals(probe.identifier, record.peer.identifier)
+            assertEquals(probe.name, record.peer.name)
+            assertEquals(probe.model, record.peer.model)
+            assertEquals(probe.udid, record.peer.udid)
+            assertTrue(record.sessionKey.contentEquals(probe.sessionKey))
+            assertEquals(64, record.sessionKey.size)
+            assertTrue("the host signature should verify", probe.accessorySignatureValid)
+            assertEquals(identity.identifier, probe.accessoryIdentifier)
+            assertTrue(identity.longTermPublicKey.contentEquals(probe.accessoryPublicKey!!))
             assertTrue(failures.isEmpty())
-            assertEquals(1, store.all().size)
         }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
     }
 
     @Test
-    fun `pinless pairing skips the code exchange`() {
-        val pinlessIdentity = HostIdentity.generate(name = "SideJIT pinless")
+    fun `a wrong code is answered with an authentication error and nothing is stored`() {
+        val (socket, stream) = connect()
+        socket.use {
+            val probe = TestDevice(stream, setupCode = "000000")
+            probe.handshake()
+            probe.beginPairSetup()
+            awaitCode()
+            probe.completePairSetupWithWrongProof()
+            val response = probe.receiveTlv()
+            assertEquals(4, Tlv8.byte(response, PairingComponent.STATE))
+            assertEquals(0x02, Tlv8.byte(response, PairingComponent.ERROR))
+        }
+        assertTrue(finished.await(20, TimeUnit.SECONDS))
+        assertTrue(store.all().isEmpty())
+        assertFalse(failures.isEmpty())
+    }
+
+    @Test
+    fun `a device asking to verify an existing pairing is refused`() {
+        val (socket, stream) = connect()
+        socket.use {
+            val probe = TestDevice(stream, setupCode = "000000")
+            var threw = false
+            try {
+                probe.handshake(attemptPairVerify = true)
+            } catch (failure: Exception) {
+                threw = true
+            }
+            assertTrue("the host should not answer a pair verify attempt", threw)
+        }
+        assertTrue(finished.await(20, TimeUnit.SECONDS))
+        assertTrue(store.all().isEmpty())
+        assertNotNull(failures.firstOrNull())
+    }
+
+    @Test
+    fun `a pinless host uses the all zero code`() {
+        listener.stop()
+        val pinlessCodes = ArrayList<String>()
         val pinlessStore = InMemoryPairingStore()
-        val pinlessListener = PairableHostListener(pinlessIdentity, pinlessStore, pinless = true)
-        val pinlessPaired = CountDownLatch(1)
-        pinlessListener.onPaired = { _, _ -> pinlessPaired.countDown() }
+        val pinlessListener = PairableHostListener(identity, pinlessStore, pinless = true)
+        pinlessListener.onSetupCode = { code -> if (code != null) synchronized(pinlessCodes) { pinlessCodes.add(code) } }
         pinlessListener.start()
         try {
             val socket = Socket(InetAddress.getLoopbackAddress(), pinlessListener.port)
@@ -108,9 +155,25 @@ class PairableHostTest {
                     RpPairingStream.INITIATOR_ROLE,
                 )
                 val probe = TestDevice(stream, setupCode = "000000")
-                probe.handshake()
-                probe.completePairSetup()
-                assertTrue(pinlessPaired.await(20, TimeUnit.SECONDS))
+                val response = probe.handshake()
+                assertEquals(
+                    true,
+                    response.path("response", "_1", "handshake", "_0", "deviceOptions", "allowsPinlessPairing")
+                        ?.asBool,
+                )
+                probe.beginPairSetup()
+                val deadline = System.currentTimeMillis() + 20_000
+                var code: String? = null
+                while (code == null && System.currentTimeMillis() < deadline) {
+                    code = synchronized(pinlessCodes) { pinlessCodes.firstOrNull() }
+                    if (code == null) Thread.sleep(10)
+                }
+                assertEquals("000000", code)
+                probe.completePairSetup("000000")
+                val deadline2 = System.currentTimeMillis() + 20_000
+                while (pinlessStore.all().isEmpty() && System.currentTimeMillis() < deadline2) {
+                    Thread.sleep(10)
+                }
                 assertEquals(1, pinlessStore.all().size)
             }
         } finally {
