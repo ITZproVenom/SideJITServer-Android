@@ -7,7 +7,7 @@ import dev.sidejit.core.serialization.jsonObject
 object ProcessControl {
     const val SERVICE = "com.apple.instruments.server.services.processcontrol"
     const val DEBUGSERVER = "com.apple.internal.dt.coredevice.device.control.debugserver"
-    const val DEBUGPROXY = "com.apple.debugserver"
+    const val DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
     private const val SELECTOR_LAUNCH =
         "launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:"
 
