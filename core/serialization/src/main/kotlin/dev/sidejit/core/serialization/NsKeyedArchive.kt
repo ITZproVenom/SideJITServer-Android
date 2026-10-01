@@ -168,15 +168,20 @@ object NsKeyedArchive {
                     else nodes += Node(Kind.UTF16, text = value.value)
                 }
                 is PValue.Data -> nodes += Node(Kind.DATA, bytes = value.value)
-                is PValue.Array -> nodes += Node(Kind.ARRAY, refs = value.items.map { intern(it) }.toIntArray())
+                is PValue.Array -> {
+                    nodes += Node(Kind.NULL)
+                    val refs = value.items.map { intern(it) }.toIntArray()
+                    nodes[index] = Node(Kind.ARRAY, refs = refs)
+                }
                 is PValue.Dict -> {
+                    nodes += Node(Kind.NULL)
                     val pairs = value.entries.map { (key, item) -> intern(PValue.Text(key)) to intern(item) }
                     val refs = IntArray(pairs.size * 2)
                     for (i in pairs.indices) {
                         refs[i] = pairs[i].first
                         refs[pairs.size + i] = pairs[i].second
                     }
-                    nodes += Node(Kind.DICT, refs = refs)
+                    nodes[index] = Node(Kind.DICT, refs = refs)
                 }
                 is PValue.Uid -> nodes += Node(Kind.UID, uid = value.value)
             }
