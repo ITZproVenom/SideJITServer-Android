@@ -130,7 +130,7 @@ class PairVerify(
                             "_0" to jsonObject(
                                 "data" to JsonValue.of(Base64.getEncoder().encodeToString(payload)),
                                 "startNewSession" to JsonValue.of(false),
-                                "kind" to JsonValue.of("verifyPairing"),
+                                "kind" to JsonValue.of("verifyManualPairing"),
                             ),
                         ),
                     ),
