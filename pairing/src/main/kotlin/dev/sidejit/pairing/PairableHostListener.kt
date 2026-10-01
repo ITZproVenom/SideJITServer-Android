@@ -157,6 +157,7 @@ class PairableHostListener(
                 }
             }
             val port = json.path("createListener", "port")?.asLong
+                ?: json.path("response", "_1", "createListener", "port")?.asLong
                 ?: json.path("response", "_0", "createListener", "port")?.asLong
             if (port != null && port in 1..65535) {
                 Log.i(LogTag.PAIRING, "createListener returned port $port for $peerHost")
