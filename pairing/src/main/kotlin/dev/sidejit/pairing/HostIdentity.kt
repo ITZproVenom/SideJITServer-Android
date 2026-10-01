@@ -51,7 +51,7 @@ class HostIdentity(
         "identifier" to identifier,
         "authTag" to SipHash.authTagBase64(alternateIdentityKey, identifier),
         "model" to model,
-        "flags" to "0",
+        "flags" to "1",
         "ver" to WIRE_PROTOCOL_VERSION.toString(),
         "minVer" to MINIMUM_WIRE_PROTOCOL_VERSION.toString(),
     ).also { if (pinless) it["pinless"] = "1" }
@@ -71,7 +71,7 @@ class HostIdentity(
 
         /** The protocol version iOS 26 and 27 speak in the remote pairing handshake. */
         const val WIRE_PROTOCOL_VERSION: Int = 26
-        const val MINIMUM_WIRE_PROTOCOL_VERSION: Int = 8
+        const val MINIMUM_WIRE_PROTOCOL_VERSION: Int = 17
 
         private const val FORMAT_VERSION = 1
 
