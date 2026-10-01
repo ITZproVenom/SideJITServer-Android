@@ -51,7 +51,7 @@ class HostIdentity(
         "identifier" to identifier,
         "authTag" to SipHash.authTagBase64(alternateIdentityKey, identifier),
         "model" to model,
-        "flags" to "1",
+        "flags" to "0",
         "ver" to WIRE_PROTOCOL_VERSION.toString(),
         "minVer" to MINIMUM_WIRE_PROTOCOL_VERSION.toString(),
     ).also { if (pinless) it["pinless"] = "1" }
