@@ -56,18 +56,18 @@ object NsKeyedArchive {
         val document = BplistParser(bytes).parseRoot() as? Parsed.Dict
             ?: throw IllegalArgumentException("binary plist root is not a dictionary")
         val top = document.values["$" + "top"] as? Parsed.Dict
-            ?: throw IllegalArgumentException("binary plist is missing $top")
+            ?: throw IllegalArgumentException("binary plist is missing " + "$" + "top")
         val rootUid = top.values["root"] as? Parsed.Uid
-            ?: throw IllegalArgumentException("binary plist $top is missing root UID")
+            ?: throw IllegalArgumentException("binary plist " + "$" + "top" + " is missing root UID")
         val objects = document.values["$" + "objects"] as? Parsed.ArrayValue
-            ?: throw IllegalArgumentException("binary plist is missing $objects")
+            ?: throw IllegalArgumentException("binary plist is missing " + "$" + "objects")
         val root = objects.items.getOrNull(rootUid.index)
-            ?: throw IllegalArgumentException("root UID " + rootUid.index + " is outside $objects")
+            ?: throw IllegalArgumentException("root UID " + rootUid.index + " is outside " + "$" + "objects")
         return when (root) {
             is Parsed.Integer -> root.value
             is Parsed.Uid -> {
                 val target = objects.items.getOrNull(root.index)
-                    ?: throw IllegalArgumentException("PID UID " + root.index + " is outside $objects")
+                    ?: throw IllegalArgumentException("PID UID " + root.index + " is outside " + "$" + "objects")
                 (target as? Parsed.Integer)?.value
                     ?: throw IllegalArgumentException("keyed archive root UID does not point to an integer")
             }
