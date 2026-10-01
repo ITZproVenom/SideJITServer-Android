@@ -5,11 +5,31 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * After CDTunnel handshake, the data plane carries raw IPv6 packets.
- * Some paths length-prefix with a 4-byte big-endian size; CoreDeviceProxy
- * over lockdown uses raw packet boundaries. This codec supports both modes.
+ * After the CDTunnel handshake, the TCP tunnel carries raw IPv6 packets.
+ * Packet boundaries come from the IPv6 header's 16-bit Payload Length field;
+ * there is no additional per-packet length prefix on the trusted TLS stream.
+ *
+ * The legacy length-prefixed helpers remain available for paths that explicitly
+ * use that framing, but the CoreDevice TCP tunnel uses the raw packet methods.
  */
 object TunnelDataPlane {
+    fun writePacket(output: OutputStream, packet: ByteArray) {
+        require(packet.size >= 40) { "IPv6 packet must contain a 40-byte header" }
+        require(isIpv6(packet)) { "packet is not IPv6" }
+        val payloadLength = ((packet[4].toInt() and 0xFF) shl 8) or (packet[5].toInt() and 0xFF)
+        require(packet.size == 40 + payloadLength) {
+            "IPv6 payload length $payloadLength does not match packet size ${packet.size}"
+        }
+        output.write(packet)
+        output.flush()
+    }
+
+    fun readPacket(input: InputStream): ByteArray {
+        val header = readExactly(input, 40)
+        require(isIpv6(header)) { "tunnel packet is not IPv6" }
+        val payloadLength = ((header[4].toInt() and 0xFF) shl 8) or (header[5].toInt() and 0xFF)
+        return header + readExactly(input, payloadLength)
+    }
     fun writeLengthPrefixed(output: OutputStream, packet: ByteArray) {
         require(packet.isNotEmpty()) { "empty packet" }
         val header = ByteArray(4)
