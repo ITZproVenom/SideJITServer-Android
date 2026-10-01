@@ -28,13 +28,90 @@ object NsKeyedArchive {
     fun array(vararg items: Value) = Value.Array(items.toList())
     fun array(items: List<Value>) = Value.Array(items)
 
-    fun encode(root: Value): ByteArray = writeBplist(root)
+    fun encode(root: Value): ByteArray {
+        val builder = ArchiveBuilder()
+        val rootIndex = builder.archive(root)
+        return writePlist(
+            PValue.Dict(linkedMapOf(
+                "\$archiver" to PValue.Text("NSKeyedArchiver"),
+                "\$version" to PValue.Integer(100000),
+                "\$top" to PValue.Dict(linkedMapOf("root" to PValue.Uid(rootIndex.toLong()))),
+                "\$objects" to PValue.Array(builder.objects.map { it }),
+            )),
+        )
+    }
 
     fun methodInvocation(selector: String, namedArgs: Map<String, Value>): ByteArray {
         val argsArray = array(namedArgs.map { (name, value) ->
             dict("name" to text(name), "value" to value)
         })
         return encode(dict("selector" to text(selector), "arguments" to argsArray))
+    }
+
+    /** Internal binary-plist values. UID is a plist object reference value. */
+    private sealed interface PValue {
+        data object Null : PValue
+        data class Bool(val value: Boolean) : PValue
+        data class Integer(val value: Long) : PValue
+        data class Real(val value: Double) : PValue
+        data class Text(val value: String) : PValue
+        data class Data(val value: ByteArray) : PValue
+        data class Array(val items: List<PValue>) : PValue
+        data class Dict(val entries: LinkedHashMap<String, PValue>) : PValue
+        data class Uid(val value: Long) : PValue
+    }
+
+    private class ArchiveBuilder {
+        val objects = ArrayList<PValue>()
+
+        fun archive(value: Value): Int = when (value) {
+            Value.Null -> add(PValue.Text("\$null"))
+            is Value.Bool -> add(PValue.Bool(value.value))
+            is Value.Integer -> add(PValue.Integer(value.value))
+            is Value.Real -> add(PValue.Real(value.value))
+            is Value.Text -> add(PValue.Text(value.value))
+            is Value.Data -> add(PValue.Data(value.value))
+            is Value.Array -> {
+                val index = objects.size
+                objects.add(PValue.Null)
+                val itemRefs = value.items.map { PValue.Uid(archive(it).toLong()) }
+                val classIndex = addClass("NSArray", listOf("NSArray", "NSObject"))
+                objects[index] = PValue.Dict(linkedMapOf(
+                    "\$class" to PValue.Uid(classIndex.toLong()),
+                    "NS.objects" to PValue.Array(itemRefs),
+                ))
+                index
+            }
+            is Value.Dict -> {
+                val index = objects.size
+                objects.add(PValue.Null)
+                val keys = ArrayList<PValue>()
+                val vals = ArrayList<PValue>()
+                for ((key, item) in value.entries) {
+                    keys += PValue.Uid(archive(Value.Text(key)).toLong())
+                    vals += PValue.Uid(archive(item).toLong())
+                }
+                val classIndex = addClass("NSDictionary", listOf("NSDictionary", "NSObject"))
+                objects[index] = PValue.Dict(linkedMapOf(
+                    "\$class" to PValue.Uid(classIndex.toLong()),
+                    "NS.keys" to PValue.Array(keys),
+                    "NS.objects" to PValue.Array(vals),
+                ))
+                index
+            }
+        }
+
+        private fun add(value: PValue): Int {
+            val index = objects.size
+            objects.add(value)
+            return index
+        }
+
+        private fun addClass(name: String, classes: List<String>): Int =
+            add(PValue.Dict(linkedMapOf(
+                "\$classname" to PValue.Text(name),
+                "\$classes" to PValue.Array(classes.map(PValue::Text)),
+            )))
     }
 
     private data class Node(
