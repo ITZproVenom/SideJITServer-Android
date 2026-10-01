@@ -130,4 +130,11 @@ class ChaChaPolyTest {
         assertEquals("000000000100000000000000", ChaChaPoly.nonce(1L).hex())
         assertEquals("00000000ff00000000000000", ChaChaPoly.nonce(255L).hex())
     }
+
+    @Test
+    fun `the RPPairing nonce puts the sequence first`() {
+        assertEquals("000000000000000000000000", ChaChaPoly.rppairingNonce(0L).hex())
+        assertEquals("010000000000000000000000", ChaChaPoly.rppairingNonce(1L).hex())
+        assertEquals("ff0000000000000000000000", ChaChaPoly.rppairingNonce(255L).hex())
+    }
 }
