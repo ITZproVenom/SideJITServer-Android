@@ -292,10 +292,14 @@ class ServerRuntime private constructor(private val context: Context) {
             else -> "not_ready"
         }
         val device = session?.record?.peer?.name?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
+        // Clients such as LiveContainer build their request URL around a device identifier, so
+        // the one this pairing produced has to be visible somewhere.
+        val udid = (session?.record?.peer?.udid ?: pairingStore?.all()?.firstOrNull()?.peer?.udid)
+            ?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
         val peerJson = peer?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
         val portJson = listenerPort?.toString() ?: "null"
         val stack = LocalHttpApi.jsonEscapeStatic(JitEngine.describeStack())
-        return """{"ok":true,"jit":${LocalHttpApi.jsonEscapeStatic(jit)},"paired":$paired,"device":$device,"peerHost":$peerJson,"listenerPort":$portJson,"tunnel":$tunnelOpen,"version":"0.1.0","stack":$stack}"""
+        return """{"ok":true,"jit":${LocalHttpApi.jsonEscapeStatic(jit)},"paired":$paired,"device":$device,"peerHost":$peerJson,"udid":$udid,"listenerPort":$portJson,"tunnel":$tunnelOpen,"version":"0.1.0","stack":$stack}"""
     }
 
     /**
