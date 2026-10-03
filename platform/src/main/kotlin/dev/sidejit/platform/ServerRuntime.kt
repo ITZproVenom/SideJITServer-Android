@@ -36,6 +36,7 @@ class ServerRuntime private constructor(private val context: Context) {
     private var httpApi: LocalHttpApi? = null
     private var lease: MulticastLease? = null
     private var watcher: NetworkWatcher? = null
+    private var link: DeviceLink? = null
     private var lastSignature: String = ""
     private val lastVerified = AtomicReference<VerifiedSession?>(null)
     private val lastPeerHost = AtomicReference<String?>(null)
@@ -143,7 +144,78 @@ class ServerRuntime private constructor(private val context: Context) {
         lease = MulticastLease(context).apply { acquire() }
         publishAddresses()
         startResponder(host, port)
+        startDeviceLink(host, store)
         watcher = NetworkWatcher(context) { onNetworkChanged(host, port) }.also { it.start() }
+    }
+
+    /**
+     * Brings up the outbound half of the connection.
+     *
+     * Pairing leaves us as the accessory, and iOS will not create a tunnel listener on a
+     * connection it opened. So once a pairing record exists we browse for the device and dial it,
+     * which is the only direction that can reach JIT.
+     */
+    private fun startDeviceLink(host: HostIdentity, store: VaultPairingStore) {
+        link?.stop()
+        link = DeviceLink(
+            identity = host,
+            store = store,
+            onSearching = {
+                if (lastVerified.get() == null) {
+                    _state.update {
+                        it.copy(
+                            tunnel = Stage(
+                                "CoreDevice tunnel",
+                                StageStatus.RUNNING,
+                                "looking for the device on the network\u2026",
+                            ),
+                        )
+                    }
+                }
+            },
+            onVerified = { session, peerHost ->
+                lastVerified.set(session)
+                lastPeerHost.set(peerHost)
+                _state.update {
+                    it.copy(
+                        device = Stage(
+                            "Paired iOS device",
+                            StageStatus.READY,
+                            "${session.record.peer.name} (verified) @ $peerHost",
+                        ),
+                        tunnel = Stage(
+                            "CoreDevice tunnel",
+                            StageStatus.RUNNING,
+                            "verified outbound; requesting createListener\u2026",
+                        ),
+                    )
+                }
+                Log.i(LogTag.SERVER, "outbound verify ok ${session.record.peer.name} at $peerHost")
+            },
+            onListener = { peerHost, listenerPort ->
+                lastPeerHost.set(peerHost)
+                lastListenerPort.set(listenerPort)
+                _state.update {
+                    it.copy(
+                        tunnel = Stage(
+                            "CoreDevice tunnel",
+                            StageStatus.READY,
+                            "createListener port $listenerPort on $peerHost",
+                        ),
+                        jit = Stage("JIT", StageStatus.IDLE, "ready to attempt /launch"),
+                    )
+                }
+                Log.i(LogTag.SERVER, "outbound tunnel listener $peerHost:$listenerPort")
+            },
+            onLost = { reason ->
+                lastListenerPort.set(null)
+                _state.update {
+                    it.copy(
+                        tunnel = Stage("CoreDevice tunnel", StageStatus.RUNNING, reason.take(180)),
+                    )
+                }
+            },
+        ).also { it.start() }
     }
 
     private fun startHttpApi() {
@@ -300,6 +372,8 @@ class ServerRuntime private constructor(private val context: Context) {
         responder = null
         runCatching { httpApi?.stop() }
         httpApi = null
+        link?.stop()
+        link = null
         listener?.stop()
         listener = null
         lease?.release()
