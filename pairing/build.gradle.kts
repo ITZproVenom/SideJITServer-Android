@@ -10,6 +10,7 @@ dependencies {
     api(project(":core:crypto"))
     api(project(":core:serialization"))
     api(project(":core:net"))
+    api(project(":core:mdns"))
     implementation(project(":core:logging"))
     implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit)
