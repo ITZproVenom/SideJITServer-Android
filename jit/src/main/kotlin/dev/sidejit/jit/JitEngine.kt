@@ -1,6 +1,7 @@
 package dev.sidejit.jit
 
 import dev.sidejit.coredevice.CoreDeviceTunnel
+import dev.sidejit.coredevice.RsdCheckin
 import dev.sidejit.coredevice.RsdClient
 import dev.sidejit.coredevice.TunnelDiagnostics
 import dev.sidejit.coredevice.UserspaceTcp
@@ -83,6 +84,13 @@ object JitEngine {
                     processService.port,
                 )
                 try {
+                    if (!processService.usesRemoteXpc) {
+                        RsdCheckin.perform(
+                            processTcp.input,
+                            processTcp.output,
+                            processService.name,
+                        )
+                    }
                     val pid = DtxProcessControl(
                         processTcp.input,
                         processTcp.output,
@@ -109,6 +117,13 @@ object JitEngine {
                         debugService.port,
                     )
                     try {
+                        if (!debugService.usesRemoteXpc) {
+                            RsdCheckin.perform(
+                                debugTcp.input,
+                                debugTcp.output,
+                                debugService.name,
+                            )
+                        }
                         DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
                         TunnelDiagnostics.record("debugproxy attached and detached for pid $pid")
                         return Result.Granted(bundleId, pid)
