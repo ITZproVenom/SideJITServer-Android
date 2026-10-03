@@ -39,8 +39,25 @@ step that could not complete without a live device.
 | DTX framing, channel request, method invocation, PID decode | IMPLEMENTED (no live device) |
 | ProcessControl launch archive + JSON | IMPLEMENTED |
 | GDB remote JIT sequence | IMPLEMENTED |
-| Local HTTP API (/status, /launch, /re) | IMPLEMENTED (started by ServerRuntime on :8080) |
+| Local HTTP API, SideJITServer route shape | IMPLEMENTED (started by ServerRuntime on :8080) |
 | JIT orchestration | IMPLEMENTED (fails without live device) |
+
+## HTTP API
+
+Served on :8080. The route shape is SideJITServer's, because that is what SideStore and
+LiveContainer already speak. Trailing slashes are optional.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /`, `GET /status` | server state as JSON |
+| `GET /ver/`, `GET /version` | version |
+| `GET /re/` | answers, but nothing is cached to refresh |
+| `GET /<udid>/<bundle id>/` | enable JIT; what SideStore calls |
+| `GET /<bundle id>/` | enable JIT on the only paired device |
+| `GET /<udid>/` | 501, listing installed apps is NOT IMPLEMENTED |
+| `GET\|POST /launch?bundleId=` | the same launch by query parameter |
+
+A launch answers 503 with the stage that could not complete unless JIT was really granted.
 
 ## Not validated on hardware
 

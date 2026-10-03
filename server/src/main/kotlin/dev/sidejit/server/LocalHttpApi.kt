@@ -9,8 +9,15 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** What a client needs to know about a paired device. */
+data class DeviceSummary(val udid: String, val name: String)
+
 /**
- * Minimal HTTP server SideStore / LiveContainer-style clients can hit.
+ * The HTTP API SideStore and LiveContainer talk to.
+ *
+ * The route shape is SideJITServer's, because that is what the clients already speak: they ask
+ * for `/<udid>/<bundle id>/` to enable JIT rather than passing query parameters. Trailing
+ * slashes are optional everywhere.
  */
 class LocalHttpApi(
     private val port: Int = 8080,
@@ -19,6 +26,7 @@ class LocalHttpApi(
         """{"ok":true,"jit":"not_ready","version":"0.1.0","stack":${jsonEscapeStatic(JitEngine.describeStack())}}"""
     },
     private val launchHandler: (String) -> JitEngine.Result = { JitEngine.enable(it) },
+    private val deviceProvider: () -> List<DeviceSummary> = { emptyList() },
 ) {
     private val running = AtomicBoolean(false)
     private var server: ServerSocket? = null
@@ -76,47 +84,111 @@ class LocalHttpApi(
         val pathOnly = path.substringBefore('?').trimEnd('/')
         val pathNorm = if (pathOnly.isEmpty()) "/" else pathOnly
         val query = path.substringAfter('?', "")
+        val segments = pathNorm.split('/').filter { it.isNotEmpty() }.map(::decode)
         return when {
             method == "OPTIONS" -> Triple("204 No Content", "", "text/plain")
-            method == "GET" && (pathNorm == "/" || pathNorm == "/status") ->
-                Triple("200 OK", statusProvider(), "application/json")
-            method == "GET" && pathNorm == "/version" ->
-                Triple("200 OK", "0.1.0", "text/plain; charset=utf-8")
-            method == "GET" && (pathNorm == "/re" || pathNorm.startsWith("/re/")) ->
-                Triple("200 OK", """{"ok":true,"refreshed":true}""", "application/json")
-            method == "POST" && pathNorm == "/launch" -> launch(query)
-            method == "GET" && (pathNorm == "/launch" || pathNorm == "/launch_app") -> launch(query)
-            else -> Triple(
-                "404 Not Found",
-                """{"ok":false,"error":"not found","path":${jsonEscape(pathNorm)}}""",
-                "application/json",
-            )
+            method != "GET" && method != "POST" ->
+                Triple("405 Method Not Allowed", error("only GET and POST are served"), JSON)
+            pathNorm == "/" || pathNorm == "/status" ->
+                Triple("200 OK", statusProvider(), JSON)
+            pathNorm == "/ver" || pathNorm == "/version" ->
+                Triple("200 OK", """{"ok":true,"version":${jsonEscape(VERSION)}}""", JSON)
+            pathNorm == "/re" ->
+                // Nothing is cached, so there is nothing to invalidate. The device link keeps
+                // itself current; saying so is more honest than claiming a refresh happened.
+                Triple(
+                    "200 OK",
+                    """{"ok":true,"refreshed":false,"note":"the server rediscovers the device continuously"}""",
+                    JSON,
+                )
+            pathNorm == "/launch" || pathNorm == "/launch_app" -> launch(bundleFromQuery(query))
+            segments.size == 1 -> single(segments[0])
+            segments.size == 2 -> pair(segments[0], segments[1])
+            else -> Triple("404 Not Found", error("unknown path", pathNorm), JSON)
         }
     }
 
-    private fun launch(query: String): Triple<String, String, String> {
-        val bundleId = sequenceOf("bundleId", "bundle_id", "bundle")
-            .map { key ->
+    /** `/<bundle id>/` enables JIT; `/<udid>/` would list apps, which is not implemented. */
+    private fun single(segment: String): Triple<String, String, String> {
+        val devices = deviceProvider()
+        if (devices.any { it.udid.equals(segment, ignoreCase = true) }) {
+            return Triple(
+                "501 Not Implemented",
+                error("listing the apps on a device is not implemented; ask for /$segment/<bundle id>/ instead"),
+                JSON,
+            )
+        }
+        if (!segment.contains('.')) {
+            return Triple(
+                "404 Not Found",
+                error("no paired device has the identifier $segment, and it is not a bundle identifier"),
+                JSON,
+            )
+        }
+        return launch(segment)
+    }
+
+    /** `/<udid>/<bundle id>/` is the route SideStore uses to enable JIT. */
+    private fun pair(first: String, second: String): Triple<String, String, String> {
+        val devices = deviceProvider()
+        if (devices.isNotEmpty() && devices.none { it.udid.equals(first, ignoreCase = true) }) {
+            return Triple(
+                "404 Not Found",
+                error(
+                    "no paired device has the identifier $first (paired: " +
+                        devices.joinToString { it.udid } + ")",
+                ),
+                JSON,
+            )
+        }
+        return launch(second)
+    }
+
+    private fun bundleFromQuery(query: String): String =
+        sequenceOf("bundleId", "bundle_id", "bundle")
+            .mapNotNull { key ->
                 query.split('&')
                     .map { it.substringBefore('=') to it.substringAfter('=', "") }
                     .firstOrNull { it.first.equals(key, ignoreCase = true) }
                     ?.second
                     ?.takeIf { it.isNotBlank() }
+                    ?.let(::decode)
             }
-            .firstOrNull { it != null }
+            .firstOrNull()
             ?: "unknown"
+
+    private fun launch(bundleId: String): Triple<String, String, String> {
         val result = launchHandler(bundleId)
         return when (result) {
             is JitEngine.Result.Granted ->
-                Triple("200 OK", """{"ok":true,"pid":${result.pid},"bundleId":${jsonEscape(bundleId)}}""", "application/json")
+                Triple(
+                    "200 OK",
+                    """{"ok":true,"pid":${result.pid},"bundleId":${jsonEscape(bundleId)}}""",
+                    JSON,
+                )
             is JitEngine.Result.Failed ->
                 Triple(
                     "503 Service Unavailable",
                     """{"ok":false,"error":${jsonEscape(result.reason)},"bundleId":${jsonEscape(bundleId)}}""",
-                    "application/json",
+                    JSON,
                 )
         }
     }
+
+    private fun error(message: String, path: String? = null): String =
+        if (path == null) {
+            """{"ok":false,"error":${jsonEscape(message)}}"""
+        } else {
+            """{"ok":false,"error":${jsonEscape(message)},"path":${jsonEscape(path)}}"""
+        }
+
+    /** Percent decoding, because a bundle identifier can arrive encoded. */
+    private fun decode(segment: String): String =
+        try {
+            java.net.URLDecoder.decode(segment, "UTF-8")
+        } catch (_: Exception) {
+            segment
+        }
 
     private fun jsonEscape(text: String): String =
         buildString {
@@ -135,6 +207,9 @@ class LocalHttpApi(
         }
 
     companion object {
+        const val VERSION: String = "0.1.0"
+        private const val JSON = "application/json"
+
         fun jsonEscapeStatic(text: String): String =
             buildString {
                 append('"')

@@ -11,6 +11,7 @@ import dev.sidejit.jit.JitEngine
 import dev.sidejit.pairing.HostIdentity
 import dev.sidejit.pairing.PairableHostListener
 import dev.sidejit.pairing.VerifiedSession
+import dev.sidejit.server.DeviceSummary
 import dev.sidejit.server.LocalHttpApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,7 @@ class ServerRuntime private constructor(private val context: Context) {
     private var lease: MulticastLease? = null
     private var watcher: NetworkWatcher? = null
     private var link: DeviceLink? = null
+    private var pairingStore: VaultPairingStore? = null
     private var lastSignature: String = ""
     private val lastVerified = AtomicReference<VerifiedSession?>(null)
     private val lastPeerHost = AtomicReference<String?>(null)
@@ -47,6 +49,7 @@ class ServerRuntime private constructor(private val context: Context) {
         Log.i(LogTag.SERVER, "runtime starting")
         _state.update { it.copy(wifi = Stage("Wi-Fi", StageStatus.RUNNING, "looking for an address")) }
         val store = VaultPairingStore(context)
+        pairingStore = store
         val host = IdentityStorage.loadOrCreate(context)
         identity = host
         _state.update {
@@ -229,6 +232,11 @@ class ServerRuntime private constructor(private val context: Context) {
                     port = p,
                     statusProvider = { buildStatusJson() },
                     launchHandler = { bundleId -> handleLaunch(bundleId) },
+                    deviceProvider = {
+                        pairingStore?.all().orEmpty().map { record ->
+                            DeviceSummary(record.peer.udid, record.peer.name)
+                        }
+                    },
                 )
                 api.start()
                 httpApi = api
@@ -380,6 +388,7 @@ class ServerRuntime private constructor(private val context: Context) {
         listener = null
         lease?.release()
         lease = null
+        pairingStore = null
         identity = null
         lastVerified.set(null)
         lastPeerHost.set(null)
