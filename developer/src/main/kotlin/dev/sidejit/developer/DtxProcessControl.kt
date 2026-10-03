@@ -16,6 +16,7 @@ class DtxProcessControl(
     private var channelCode = 1
 
     fun launchSuspended(bundleId: String): Long {
+        notifyCapabilities()
         val serviceChannel = requestChannel(ProcessControl.SERVICE)
         val selector = NsKeyedArchive.encode(NsKeyedArchive.text(
             "launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:"
@@ -50,6 +51,32 @@ class DtxProcessControl(
             throw DtxException("ProcessControl launch returned no PID")
         }
         return NsKeyedArchive.readRootInteger(reply.payload)
+    }
+
+    /**
+     * Announces what this client supports, as Instruments does on connecting.
+     *
+     * The device sends its own capabilities unprompted and does not reply to ours, so this is
+     * sent without expecting an answer.
+     */
+    private fun notifyCapabilities() {
+        val selector = NsKeyedArchive.encode(
+            NsKeyedArchive.text("_notifyOfPublishedCapabilities:"),
+        )
+        val capabilities = NsKeyedArchive.encode(
+            NsKeyedArchive.dict(
+                "com.apple.private.DTXConnection" to NsKeyedArchive.integer(1),
+                "com.apple.private.DTXBlockCompression" to NsKeyedArchive.integer(2),
+            ),
+        )
+        writeFrame(
+            nextId(),
+            0,
+            0,
+            false,
+            selector,
+            primitiveDictionary(PrimitiveArg.Bytes(capabilities)),
+        )
     }
 
     private fun requestChannel(service: String): Int {

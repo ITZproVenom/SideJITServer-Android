@@ -53,8 +53,9 @@ object CoreDeviceTunnel {
         listenerPort: Int,
         psk: ByteArray,
     ): OpenedTunnel {
-        TunnelDiagnostics.reset()
-        TunnelDiagnostics.record("TLS-PSK connect to $host:$listenerPort")
+        // Deliberately not cleared: a failed launch rebuilds the tunnel, and wiping the trace
+        // here would throw away the evidence of why the previous attempt failed.
+        TunnelDiagnostics.record("--- TLS-PSK connect to $host:$listenerPort")
         Log.i(LogTag.TUNNEL, "TLS-PSK connect $host:$listenerPort")
         val tls = TlsPskClient(psk).connect(host, listenerPort)
         try {

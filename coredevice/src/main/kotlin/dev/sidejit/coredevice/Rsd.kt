@@ -80,20 +80,65 @@ class RsdClient(
     private val input: InputStream,
     private val output: OutputStream,
 ) {
-    /** RSD on modern CoreDevice is RemoteXPC over HTTP/2, not raw length-prefixed JSON. */
+    /**
+     * Opens the RemoteXPC channels, introduces this host, and reads the device's reply.
+     *
+     * RSD says nothing to a client that has not spoken first. The device answers the host
+     * handshake with its own, which is the message that lists the developer services and the
+     * port each one listens on.
+     */
     fun readHandshake(): Rsd.Handshake {
         val h2 = H2Connection(input, output)
+        h2.openChannels()
+        h2.writeXpcMessage(hostHandshake(), streamId = H2Connection.ROOT_CHANNEL)
+        TunnelDiagnostics.record("RSD: sent the host handshake, waiting for the service list")
         var lastError: Exception? = null
         repeat(6) {
-            val message = h2.readXpcMessage(streamId = 1)
+            val message = h2.readXpcMessage(streamId = H2Connection.ROOT_CHANNEL)
             try {
-                return parseXpcHandshake(message)
+                return parseXpcHandshake(message).also {
+                    TunnelDiagnostics.record("RSD: ${it.services.size} services advertised")
+                }
             } catch (failure: Rsd.RsdException) {
+                TunnelDiagnostics.record("RSD: ignoring a message, ${failure.message}")
                 lastError = failure
             }
         }
         throw Rsd.RsdException(
             "RSD handshake message was not found after six XPC messages: " + (lastError?.message ?: "unknown error"),
+        )
+    }
+
+    /**
+     * What this host tells RSD about itself.
+     *
+     * The version flags value is what a current macOS host sends; RSD uses it to decide which
+     * properties it is willing to disclose.
+     */
+    private fun hostHandshake(): XpcCodec.Message {
+        val uuid = java.util.UUID.randomUUID()
+        val raw = java.nio.ByteBuffer.allocate(16)
+            .putLong(uuid.mostSignificantBits)
+            .putLong(uuid.leastSignificantBits)
+            .array()
+        return XpcCodec.Message(
+            flags = XpcCodec.FLAG_ALWAYS_SET or XpcCodec.FLAG_DATA,
+            messageId = 0,
+            body = XpcCodec.Value.DictionaryValue(
+                linkedMapOf(
+                    "MessageType" to XpcCodec.Value.StringValue("Handshake"),
+                    "MessagingProtocolVersion" to XpcCodec.Value.UInt64Value(7),
+                    "UUID" to XpcCodec.Value.UuidValue(raw),
+                    "Services" to XpcCodec.Value.DictionaryValue(linkedMapOf()),
+                    "Properties" to XpcCodec.Value.DictionaryValue(
+                        linkedMapOf(
+                            "RemoteXPCVersionFlags" to
+                                XpcCodec.Value.UInt64Value(0x0100000000000006L),
+                        ),
+                    ),
+                    "SensitivePropertiesVisible" to XpcCodec.Value.Bool(true),
+                ),
+            ),
         )
     }
 

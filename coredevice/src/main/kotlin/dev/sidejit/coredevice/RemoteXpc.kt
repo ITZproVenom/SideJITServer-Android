@@ -131,6 +131,7 @@ class H2Connection(
     private val openedStreams = mutableSetOf<Int>()
     private var xpcPending = ByteArray(0)
     private var connected = false
+    private var channelsOpen = false
 
     fun connect() {
         if (connected) return
@@ -159,8 +160,36 @@ class H2Connection(
         }
     }
 
-    fun readXpcMessage(streamId: Int = 1): XpcCodec.Message {
+    /**
+     * Opens the two RemoteXPC channels and sends the empty handshake message on each.
+     *
+     * Nothing arrives from the device until this is done. The root channel carries requests,
+     * the reply channel carries what comes back, and both are announced with an empty HEADERS
+     * frame followed by an XPC message that has the init handshake flag and no body.
+     */
+    fun openChannels() {
+        if (channelsOpen) return
         connect()
+        channelsOpen = true
+        initChannel(ROOT_CHANNEL)
+        initChannel(REPLY_CHANNEL)
+    }
+
+    private fun initChannel(streamId: Int) {
+        openStream(streamId)
+        val bytes = XpcCodec.encode(
+            XpcCodec.Message(
+                flags = XpcCodec.FLAG_ALWAYS_SET or XpcCodec.FLAG_INIT_HANDSHAKE,
+                messageId = 0,
+                body = null,
+            ),
+        )
+        output.write(Http2.encodeFrame(Http2.FRAME_DATA, 0, streamId, bytes))
+        output.flush()
+    }
+
+    fun readXpcMessage(streamId: Int = 1): XpcCodec.Message {
+        openChannels()
         while (true) {
             while (bufferedData.isNotEmpty()) {
                 val (id, payload) = bufferedData.removeFirst()
@@ -197,7 +226,7 @@ class H2Connection(
     }
 
     fun writeXpcMessage(message: XpcCodec.Message, streamId: Int = 1, endStream: Boolean = false) {
-        connect()
+        openChannels()
         openStream(streamId)
         val bytes = XpcCodec.encode(message)
         var offset = 0
@@ -218,6 +247,12 @@ class H2Connection(
             output.write(Http2.encodeFrame(Http2.FRAME_DATA, Http2.FLAG_END_STREAM, streamId, ByteArray(0)))
         }
         output.flush()
+    }
+
+    companion object {
+        /** Requests travel on stream 1 and replies on stream 3. */
+        const val ROOT_CHANNEL: Int = 1
+        const val REPLY_CHANNEL: Int = 3
     }
 
     private fun openStream(streamId: Int) {

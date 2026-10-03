@@ -5,7 +5,17 @@ import dev.sidejit.core.serialization.NsKeyedArchive
 import dev.sidejit.core.serialization.jsonObject
 
 object ProcessControl {
+    /**
+     * The DTX channel name. This is requested over an already open connection; RSD never
+     * advertises it.
+     */
     const val SERVICE = "com.apple.instruments.server.services.processcontrol"
+
+    /**
+     * The RSD service that carries DTX. Instruments channels, including process control, are
+     * reached by connecting here and then asking for the channel by name.
+     */
+    const val DTSERVICEHUB = "com.apple.instruments.dtservicehub"
     const val DEBUGSERVER = "com.apple.internal.dt.coredevice.device.control.debugserver"
     const val DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
     private const val SELECTOR_LAUNCH =

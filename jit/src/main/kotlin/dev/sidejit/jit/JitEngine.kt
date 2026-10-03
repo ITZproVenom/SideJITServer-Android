@@ -2,6 +2,7 @@ package dev.sidejit.jit
 
 import dev.sidejit.coredevice.CoreDeviceTunnel
 import dev.sidejit.coredevice.RsdClient
+import dev.sidejit.coredevice.TunnelDiagnostics
 import dev.sidejit.coredevice.UserspaceTcp
 import dev.sidejit.developer.DebugProxy
 import dev.sidejit.developer.DtxProcessControl
@@ -61,13 +62,17 @@ object JitEngine {
             try {
                 val handshake = RsdClient(rsdTcp.input, rsdTcp.output).readHandshake()
                 val serviceNames = handshake.services.map { it.name }
+                TunnelDiagnostics.record("RSD services: " + serviceNames.joinToString(", "))
 
-                val processService = handshake.service(ProcessControl.SERVICE)
+                // DTX is reached through dtservicehub. The process control channel is asked
+                // for over that connection; RSD does not advertise it by name.
+                val processService = handshake.service(ProcessControl.DTSERVICEHUB)
                     ?: handshake.services.firstOrNull {
-                        it.name.contains("processcontrol", ignoreCase = true)
+                        it.name.contains("dtservicehub", ignoreCase = true) ||
+                            it.name.contains("processcontrol", ignoreCase = true)
                     }
                     ?: return Result.Failed(
-                        "RSD did not advertise ProcessControl (services=$serviceNames); " +
+                        "RSD did not advertise ${ProcessControl.DTSERVICEHUB} (services=$serviceNames); " +
                             "bundleId=$bundleId",
                     )
 
@@ -105,6 +110,7 @@ object JitEngine {
                     )
                     try {
                         DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
+                        TunnelDiagnostics.record("debugproxy attached and detached for pid $pid")
                         return Result.Granted(bundleId, pid)
                     } catch (failure: Exception) {
                         return Result.Failed(
