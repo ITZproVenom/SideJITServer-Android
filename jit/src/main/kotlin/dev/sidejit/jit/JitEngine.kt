@@ -25,85 +25,99 @@ object JitEngine {
         )
 
     /**
-     * Full software path when pair-verify and createListener port are already known.
-     * A Result.Granted only means the complete software sequence returned without
-     * protocol error. Physical iPhone/iPad validation is still required.
+     * Opens a tunnel of its own and runs the whole path.
+     *
+     * Prefer [enableOnTunnel] with a tunnel that is already up: iOS closes a listener created by
+     * createListener if nothing connects to it promptly, so a port obtained earlier is usually
+     * dead by the time a person taps a button.
      */
     fun enable(
         bundleId: String,
         session: VerifiedSession,
         deviceHost: String,
         listenerPort: Int,
-    ): Result {
-        return try {
+    ): Result =
+        try {
             CoreDeviceTunnel.open(session, deviceHost, listenerPort).use { tunnel ->
-                val rsdTcp = UserspaceTcp.connect(
+                enableOnTunnel(bundleId, tunnel)
+            }
+        } catch (failure: Exception) {
+            Result.Failed("path failed: " + (failure.message ?: failure.javaClass.simpleName))
+        }
+
+    /**
+     * Runs the developer-services path over a tunnel that is already open.
+     *
+     * A Granted only means the whole software sequence returned without protocol error.
+     */
+    fun enableOnTunnel(bundleId: String, tunnel: CoreDeviceTunnel.OpenedTunnel): Result {
+        return try {
+            val rsdTcp = UserspaceTcp.connect(
+                tunnel.input,
+                tunnel.output,
+                tunnel.parameters,
+                tunnel.parameters.serverRsdPort,
+            )
+            try {
+                val handshake = RsdClient(rsdTcp.input, rsdTcp.output).readHandshake()
+                val serviceNames = handshake.services.map { it.name }
+
+                val processService = handshake.service(ProcessControl.SERVICE)
+                    ?: handshake.services.firstOrNull {
+                        it.name.contains("processcontrol", ignoreCase = true)
+                    }
+                    ?: return Result.Failed(
+                        "RSD did not advertise ProcessControl (services=$serviceNames); " +
+                            "bundleId=$bundleId",
+                    )
+
+                val processTcp = UserspaceTcp.connect(
                     tunnel.input,
                     tunnel.output,
                     tunnel.parameters,
-                    tunnel.parameters.serverRsdPort,
+                    processService.port,
                 )
                 try {
-                    val handshake = RsdClient(rsdTcp.input, rsdTcp.output).readHandshake()
-                    val serviceNames = handshake.services.map { it.name }
+                    val pid = DtxProcessControl(
+                        processTcp.input,
+                        processTcp.output,
+                    ).use { processControl ->
+                        processControl.launchSuspended(bundleId)
+                    }
 
-                    val processService = handshake.service(ProcessControl.SERVICE)
+                    val debugService = handshake.service(ProcessControl.DEBUGPROXY)
+                        ?: handshake.service(ProcessControl.DEBUGSERVER)
                         ?: handshake.services.firstOrNull {
-                            it.name.contains("processcontrol", ignoreCase = true)
+                            it.name.contains("debugproxy", ignoreCase = true) ||
+                                it.name.contains("debugserver", ignoreCase = true)
                         }
                         ?: return Result.Failed(
-                            "RSD did not advertise ProcessControl (services=$serviceNames); " +
-                                "bundleId=$bundleId",
+                            "ProcessControl launched pid=$pid for $bundleId but RSD " +
+                                "did not advertise a debugproxy/debugserver service " +
+                                "(services=$serviceNames)",
                         )
 
-                    val processTcp = UserspaceTcp.connect(
+                    val debugTcp = UserspaceTcp.connect(
                         tunnel.input,
                         tunnel.output,
                         tunnel.parameters,
-                        processService.port,
+                        debugService.port,
                     )
                     try {
-                        val pid = DtxProcessControl(
-                            processTcp.input,
-                            processTcp.output,
-                        ).use { processControl ->
-                            processControl.launchSuspended(bundleId)
-                        }
-
-                        val debugService = handshake.service(ProcessControl.DEBUGPROXY)
-                            ?: handshake.service(ProcessControl.DEBUGSERVER)
-                            ?: handshake.services.firstOrNull {
-                                it.name.contains("debugproxy", ignoreCase = true) ||
-                                    it.name.contains("debugserver", ignoreCase = true)
-                            }
-                            ?: return Result.Failed(
-                                "ProcessControl launched pid=$pid for $bundleId but RSD " +
-                                    "did not advertise a debugproxy/debugserver service " +
-                                    "(services=$serviceNames)",
-                            )
-
-                        val debugTcp = UserspaceTcp.connect(
-                            tunnel.input,
-                            tunnel.output,
-                            tunnel.parameters,
-                            debugService.port,
+                        DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
+                        return Result.Granted(bundleId, pid)
+                    } catch (failure: Exception) {
+                        return Result.Failed(
+                            "pid=$pid for $bundleId; debugproxy/GDB failed: " + failure.message,
                         )
-                        try {
-                            DebugProxy.attachForJit(debugTcp.input, debugTcp.output, pid)
-                            return Result.Granted(bundleId, pid)
-                        } catch (failure: Exception) {
-                            return Result.Failed(
-                                "pid=$pid for $bundleId; debugproxy/GDB failed: " + failure.message,
-                            )
-                        } finally {
-                            runCatching { debugTcp.close() }
-                        }
                     } finally {
-                        runCatching { processTcp.close() }
+                        runCatching { debugTcp.close() }
                     }
                 } finally {
-                    runCatching { rsdTcp.close() }
+                    runCatching { processTcp.close() }
                 }
+            } finally {
+                runCatching { rsdTcp.close() }
             }
         } catch (failure: Exception) {
             Result.Failed("path failed: " + (failure.message ?: failure.javaClass.simpleName))

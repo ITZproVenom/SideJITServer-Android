@@ -24,11 +24,11 @@ step that could not complete without a live device.
 | Layer | State |
 | --- | --- |
 | Pair setup / verify / SessionKeys (accessory side) | IMPLEMENTED |
-| mDNS browser (one shot, unicast reply, keeps IPv6 scope) | IMPLEMENTED |
+| mDNS browser (one shot, unicast reply, keeps IPv6 scope) | VALIDATED on an iPhone |
 | authTag match of an advertisement to a stored record | IMPLEMENTED |
-| Host initiated pair verify (initiator side) | IMPLEMENTED (no live device) |
-| Outbound control channel + createListener | IMPLEMENTED (no live device) |
-| DeviceLink reconnect loop | IMPLEMENTED (no live device) |
+| Host initiated pair verify (initiator side) | VALIDATED on an iPhone |
+| Outbound control channel + createListener | VALIDATED on an iPhone (returns a port) |
+| DeviceLink reconnect loop | VALIDATED on an iPhone (browse, verify, createListener) |
 | TLS-PSK client (BC, TLS_PSK_WITH_AES_256_CBC_SHA384 then AES_128_CBC_SHA) | IMPLEMENTED (no live device) |
 | CDTunnel framing + handshake parse | IMPLEMENTED |
 | Tunnel IPv6 helpers / length-prefixed packets | IMPLEMENTED |
@@ -61,10 +61,7 @@ A launch answers 503 with the stage that could not complete unless JIT was reall
 
 ## Not validated on hardware
 
-- Pairing against real iOS 27+
-- Browsing and dialling a real device's `_remotepairing._tcp` service
-- createListener on a host initiated connection
-- createListener + TLS-PSK to a real listener port
+- TLS-PSK and CDTunnel handshake against a real listener
 - Userspace TCP across a real tunnel
 - Live RSD / DVT reply parsing. The PID comes from decoding the keyed archive in the DTX
   reply, not from guessing, but no real reply has ever been decoded.
@@ -72,4 +69,13 @@ A launch answers 503 with the stage that could not complete unless JIT was reall
 
 ## Physical validation
 
-None.
+An iPhone running iOS 27, paired wirelessly, on the same Wi-Fi as an Android host:
+
+- the browse found the device's `_remotepairing._tcp` service
+- host initiated pair verify succeeded against it
+- `createListener` returned a TCP port
+
+The listener turned out to be short lived. Requesting a port and keeping it for later gave
+ECONNREFUSED on connect, so the tunnel data plane is now connected the instant the port is
+issued and held open. Whether the TLS-PSK and CDTunnel handshake succeed against a real
+listener is the next unknown.

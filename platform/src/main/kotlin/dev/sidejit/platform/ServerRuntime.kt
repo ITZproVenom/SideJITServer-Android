@@ -204,13 +204,29 @@ class ServerRuntime private constructor(private val context: Context) {
                     it.copy(
                         tunnel = Stage(
                             "CoreDevice tunnel",
-                            StageStatus.READY,
-                            "createListener port $listenerPort on $peerHost",
+                            StageStatus.RUNNING,
+                            "listener $listenerPort on $peerHost; connecting\u2026",
                         ),
-                        jit = Stage("JIT", StageStatus.IDLE, "ready to attempt /launch"),
                     )
                 }
                 Log.i(LogTag.SERVER, "outbound tunnel listener $peerHost:$listenerPort")
+            },
+            onTunnel = { peerHost, listenerPort, detail ->
+                _state.update {
+                    it.copy(
+                        tunnel = Stage(
+                            "CoreDevice tunnel",
+                            StageStatus.READY,
+                            "open to $peerHost:$listenerPort ($detail)",
+                        ),
+                        developerServices = Stage(
+                            "Developer services",
+                            StageStatus.IDLE,
+                            "reached over the live tunnel on demand",
+                        ),
+                        jit = Stage("JIT", StageStatus.IDLE, "ready to attempt a launch"),
+                    )
+                }
             },
             onLost = { reason ->
                 lastListenerPort.set(null)
@@ -267,45 +283,56 @@ class ServerRuntime private constructor(private val context: Context) {
         val peer = lastPeerHost.get()
         val listenerPort = lastListenerPort.get()
         val paired = session != null
+        val tunnelOpen = link?.hasTunnel == true
         val jit = when {
-            session != null && listenerPort != null -> "ready_to_attempt"
-            session != null -> "paired_need_listener"
+            session != null && tunnelOpen -> "ready_to_attempt"
+            session != null -> "paired_need_tunnel"
             else -> "not_ready"
         }
         val device = session?.record?.peer?.name?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
         val peerJson = peer?.let { LocalHttpApi.jsonEscapeStatic(it) } ?: "null"
         val portJson = listenerPort?.toString() ?: "null"
         val stack = LocalHttpApi.jsonEscapeStatic(JitEngine.describeStack())
-        return """{"ok":true,"jit":${LocalHttpApi.jsonEscapeStatic(jit)},"paired":$paired,"device":$device,"peerHost":$peerJson,"listenerPort":$portJson,"version":"0.1.0","stack":$stack}"""
+        return """{"ok":true,"jit":${LocalHttpApi.jsonEscapeStatic(jit)},"paired":$paired,"device":$device,"peerHost":$peerJson,"listenerPort":$portJson,"tunnel":$tunnelOpen,"version":"0.1.0","stack":$stack}"""
     }
 
+    /**
+     * Runs a launch over the tunnel the link is holding open.
+     *
+     * The tunnel is not opened here on demand: iOS closes a listener that nothing connects to,
+     * so the only usable tunnel is the one that was connected the moment it was created.
+     */
     private fun handleLaunch(bundleId: String): JitEngine.Result {
         val session = lastVerified.get()
             ?: return JitEngine.Result.Failed(
-                "no verified session yet \u2014 complete wireless pair (and re-verify) first; bundleId=$bundleId",
+                "no verified session yet; the server has not found the paired device on the " +
+                    "network. bundleId=$bundleId",
             )
-        val peer = lastPeerHost.get()
-            ?: return JitEngine.Result.Failed(
-                "paired (${session.record.peer.name}) but peer IP unknown; pair again; bundleId=$bundleId",
-            )
-        val listenerPort = lastListenerPort.get()
-            ?: return JitEngine.Result.Failed(
-                "paired with ${session.record.peer.name} @ $peer but createListener port missing. " +
-                    "Re-pair so verify runs again and watch Android logs for createListener. bundleId=$bundleId",
-            )
+        val activeLink = link
+            ?: return JitEngine.Result.Failed("the device link is not running; bundleId=$bundleId")
         _state.update {
-            it.copy(jit = Stage("JIT", StageStatus.RUNNING, "launch $bundleId via tunnel\u2026"))
+            it.copy(jit = Stage("JIT", StageStatus.RUNNING, "launch $bundleId over the tunnel\u2026"))
         }
-        val result = JitEngine.enable(bundleId, session, peer, listenerPort)
+        val result = activeLink.withTunnel { tunnel ->
+            JitEngine.enableOnTunnel(bundleId, tunnel)
+        } ?: JitEngine.Result.Failed(
+            "paired with ${session.record.peer.name} but no CoreDevice tunnel is open. " +
+                "The server reconnects by itself; watch the tunnel row and try again. " +
+                "bundleId=$bundleId",
+        )
         when (result) {
             is JitEngine.Result.Granted ->
                 _state.update {
                     it.copy(jit = Stage("JIT", StageStatus.READY, "granted pid=${result.pid} for $bundleId"))
                 }
-            is JitEngine.Result.Failed ->
+            is JitEngine.Result.Failed -> {
+                // The tunnel may have been closed by the device while it sat idle. Rebuilding is
+                // cheap, so never leave a possibly dead tunnel in place after a failure.
+                activeLink.invalidateTunnel()
                 _state.update {
                     it.copy(jit = Stage("JIT", StageStatus.FAILED, result.reason.take(120)))
                 }
+            }
         }
         return result
     }
