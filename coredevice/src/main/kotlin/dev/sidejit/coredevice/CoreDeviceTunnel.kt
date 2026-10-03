@@ -53,6 +53,8 @@ object CoreDeviceTunnel {
         listenerPort: Int,
         psk: ByteArray,
     ): OpenedTunnel {
+        TunnelDiagnostics.reset()
+        TunnelDiagnostics.record("TLS-PSK connect to $host:$listenerPort")
         Log.i(LogTag.TUNNEL, "TLS-PSK connect $host:$listenerPort")
         val tls = TlsPskClient(psk).connect(host, listenerPort)
         try {
@@ -64,8 +66,16 @@ object CoreDeviceTunnel {
                 LogTag.TUNNEL,
                 "tunnel up client=${params.clientAddress} server=${params.serverAddress} rsd=${params.serverRsdPort}",
             )
+            TunnelDiagnostics.record(
+                "tunnel up: we are ${params.clientAddress}, the device is ${params.serverAddress}, " +
+                    "rsd port ${params.serverRsdPort}, mtu ${params.mtu}",
+            )
+            // Short reads from here on, so the data plane can retransmit instead of blocking
+            // for the whole connect timeout on one read.
+            tls.readTimeout(500)
             return OpenedTunnel(tls, params, tls.input, tls.output)
         } catch (failure: Exception) {
+            TunnelDiagnostics.record("CDTunnel handshake failed: ${failure.message}")
             tls.close()
             throw TunnelException("CDTunnel handshake failed: ${failure.message}", failure)
         }

@@ -64,6 +64,16 @@ class TlsPskClient(
         val input: InputStream get() = protocol.inputStream
         val output: OutputStream get() = protocol.outputStream
 
+        /**
+         * Changes how long a read waits before giving up.
+         *
+         * The data plane needs short reads so it can retransmit, while the handshake wants a
+         * long one.
+         */
+        fun readTimeout(millis: Int) {
+            runCatching { socket.soTimeout = millis }
+        }
+
         override fun close() {
             runCatching { protocol.close() }
             runCatching { socket.close() }

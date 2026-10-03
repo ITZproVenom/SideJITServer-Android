@@ -6,6 +6,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Inet6Address
+import java.net.SocketTimeoutException
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
@@ -21,6 +22,7 @@ object UserspaceTcp {
     private const val FLAG_RST = 0x04
     private const val FLAG_PSH = 0x08
     private const val FLAG_ACK = 0x10
+    private const val SYN_RETRY_MILLIS = 1_000L
 
     data class Endpoint(val address: ByteArray, val port: Int) {
         init { require(address.size == 16); require(port in 1..65535) }
@@ -63,9 +65,15 @@ object UserspaceTcp {
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 if (len <= 0) return 0
                 synchronized(lock) {
+                    val deadline = System.currentTimeMillis() + timeoutMs
                     while (recvBuffer.size() == 0 && !closed.get()) {
-                        pump(true)
+                        receiveSegment(deadline)
                         if (recvBuffer.size() == 0 && closed.get()) return -1
+                        if (recvBuffer.size() == 0 && System.currentTimeMillis() >= deadline) {
+                            throw TcpException(
+                                "no reply from port ${remote.port} within ${timeoutMs}ms; see /diag",
+                            )
+                        }
                     }
                     val available = recvBuffer.toByteArray()
                     if (available.isEmpty()) return -1
@@ -91,23 +99,48 @@ object UserspaceTcp {
             override fun flush() {}
         }
 
+        /**
+         * Opens the connection, retransmitting the SYN.
+         *
+         * There is no retransmission anywhere else in this stack, so a single dropped SYN would
+         * otherwise fail the whole launch.
+         */
         fun handshake() {
             val isn = Random.nextInt() and 0x7FFFFFFF
             sendNext = isn
             sendSegment(FLAG_SYN, ByteArray(0), 0)
             sendNext = isn + 1
             val deadline = System.currentTimeMillis() + timeoutMs
+            var nextRetry = System.currentTimeMillis() + SYN_RETRY_MILLIS
+            var retries = 0
             while (System.currentTimeMillis() < deadline) {
-                val seg = receiveSegment(true) ?: continue
+                val seg = receiveSegment(deadline)
+                if (seg == null) {
+                    if (closed.get()) throw TcpException("the tunnel closed during the handshake")
+                    if (System.currentTimeMillis() >= nextRetry) {
+                        retries++
+                        TunnelDiagnostics.record("tx SYN retransmit $retries")
+                        val saved = sendNext
+                        sendNext = isn
+                        sendSegment(FLAG_SYN, ByteArray(0), 0)
+                        sendNext = saved
+                        nextRetry = System.currentTimeMillis() + SYN_RETRY_MILLIS
+                    }
+                    continue
+                }
                 if (seg.flags and FLAG_RST != 0) throw TcpException("RST during handshake")
                 if (seg.flags and FLAG_SYN != 0 && seg.flags and FLAG_ACK != 0) {
                     if (seg.ack != sendNext) throw TcpException("SYN-ACK ack mismatch")
                     recvNext = seg.seq + 1
                     sendSegment(FLAG_ACK, ByteArray(0), recvNext)
+                    TunnelDiagnostics.record("connection established to port ${remote.port}")
                     return
                 }
             }
-            throw TcpException("SYN-ACK timeout after ${timeoutMs}ms")
+            throw TcpException(
+                "no SYN-ACK from port ${remote.port} after ${timeoutMs}ms and $retries retransmits; " +
+                    "see /diag for what did arrive",
+            )
         }
 
         private fun sendData(payload: ByteArray) {
@@ -137,40 +170,90 @@ object UserspaceTcp {
             System.arraycopy(remote.address, 0, packet, 24, 16)
             System.arraycopy(tcp, 0, packet, IPV6_HEADER, tcp.size)
             System.arraycopy(payload, 0, packet, IPV6_HEADER + tcp.size, payload.size)
+            TunnelDiagnostics.record(
+                "tx ${TunnelDiagnostics.address(local.address)}:${local.port} -> " +
+                    "${TunnelDiagnostics.address(remote.address)}:${remote.port} " +
+                    "${TunnelDiagnostics.flags(flags)} payload ${payload.size}",
+            )
             TunnelDataPlane.writePacket(tunnelOut, packet)
         }
 
         private data class Segment(val seq: Int, val ack: Int, val flags: Int, val window: Int, val payload: ByteArray)
 
-        private fun receiveSegment(allowBlock: Boolean): Segment? {
-            while (true) {
+        /**
+         * Reads one segment for this connection, or null when [deadline] passes first.
+         *
+         * Everything that arrives is recorded, including packets this connection ignores,
+         * because a silent drop here is indistinguishable from a device that never answered.
+         */
+        private fun receiveSegment(deadline: Long): Segment? {
+            while (System.currentTimeMillis() < deadline) {
                 val packet = try {
-                    if (!allowBlock && tunnelIn.available() == 0) return null
                     TunnelDataPlane.readPacket(tunnelIn)
+                } catch (e: SocketTimeoutException) {
+                    continue
                 } catch (e: EOFException) {
+                    TunnelDiagnostics.record("the tunnel reached end of stream")
                     closed.set(true)
                     return null
                 } catch (e: Exception) {
-                    if (!allowBlock) return null
+                    if (e.cause is SocketTimeoutException) continue
                     throw TcpException("tunnel read failed: ${e.message}", e)
                 }
-                if (!TunnelDataPlane.isIpv6(packet) || packet.size < IPV6_HEADER + TCP_HEADER_MIN) continue
+                if (!TunnelDataPlane.isIpv6(packet)) {
+                    TunnelDiagnostics.record("rx dropped: not IPv6, ${packet.size} bytes")
+                    continue
+                }
                 val hdr = TunnelDataPlane.parseIpv6Header(packet)
-                if (hdr.nextHeader != PROTO_TCP) continue
-                if (!hdr.destination.contentEquals(local.address)) continue
-                if (!hdr.source.contentEquals(remote.address)) continue
+                if (hdr.nextHeader != PROTO_TCP) {
+                    TunnelDiagnostics.record(
+                        "rx dropped: next header ${hdr.nextHeader} from " +
+                            TunnelDiagnostics.address(hdr.source),
+                    )
+                    continue
+                }
+                if (packet.size < IPV6_HEADER + TCP_HEADER_MIN) {
+                    TunnelDiagnostics.record("rx dropped: TCP packet too short, ${packet.size} bytes")
+                    continue
+                }
                 val tcpOff = IPV6_HEADER
                 val headerLen = ((packet[tcpOff + 12].toInt() ushr 4) and 0xF) * 4
-                if (headerLen < TCP_HEADER_MIN || packet.size < tcpOff + headerLen) continue
+                if (headerLen < TCP_HEADER_MIN || packet.size < tcpOff + headerLen) {
+                    TunnelDiagnostics.record("rx dropped: bad TCP header length $headerLen")
+                    continue
+                }
                 val srcPort = ((packet[tcpOff].toInt() and 0xFF) shl 8) or (packet[tcpOff + 1].toInt() and 0xFF)
                 val dstPort = ((packet[tcpOff + 2].toInt() and 0xFF) shl 8) or (packet[tcpOff + 3].toInt() and 0xFF)
-                if (srcPort != remote.port || dstPort != local.port) continue
                 val seq = bytesToInt(packet, tcpOff + 4)
                 val ack = bytesToInt(packet, tcpOff + 8)
                 val flags = packet[tcpOff + 13].toInt() and 0xFF
                 val window = ((packet[tcpOff + 14].toInt() and 0xFF) shl 8) or (packet[tcpOff + 15].toInt() and 0xFF)
                 val payloadStart = tcpOff + headerLen
-                val payload = if (payloadStart < packet.size) packet.copyOfRange(payloadStart, packet.size) else ByteArray(0)
+                val payload = if (payloadStart < packet.size) {
+                    packet.copyOfRange(payloadStart, packet.size)
+                } else {
+                    ByteArray(0)
+                }
+                TunnelDiagnostics.record(
+                    "rx ${TunnelDiagnostics.address(hdr.source)}:$srcPort -> " +
+                        "${TunnelDiagnostics.address(hdr.destination)}:$dstPort " +
+                        "${TunnelDiagnostics.flags(flags)} payload ${payload.size}",
+                )
+
+                // The ports identify the connection. Addresses are checked too, but a mismatch
+                // is reported rather than silently ignored: an address we did not expect is
+                // worth knowing about, and dropping it quietly is what hid this problem.
+                if (srcPort != remote.port || dstPort != local.port) continue
+                val addressesMatch = hdr.destination.contentEquals(local.address) &&
+                    hdr.source.contentEquals(remote.address)
+                if (!addressesMatch) {
+                    TunnelDiagnostics.record(
+                        "note: the ports match but the addresses do not; expected " +
+                            "${TunnelDiagnostics.address(remote.address)} -> " +
+                            TunnelDiagnostics.address(local.address),
+                    )
+                }
+
                 if (payload.isNotEmpty() && seq == recvNext) {
                     recvBuffer.write(payload)
                     recvNext += payload.size
@@ -186,9 +269,8 @@ object UserspaceTcp {
                 if (flags and FLAG_RST != 0) closed.set(true)
                 return Segment(seq, ack, flags, window, payload)
             }
+            return null
         }
-
-        private fun pump(allowBlock: Boolean) { receiveSegment(allowBlock) }
 
         override fun close() {
             if (closed.compareAndSet(false, true)) {

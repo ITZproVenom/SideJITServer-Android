@@ -29,8 +29,8 @@ step that could not complete without a live device.
 | Host initiated pair verify (initiator side) | VALIDATED on an iPhone |
 | Outbound control channel + createListener | VALIDATED on an iPhone (returns a port) |
 | DeviceLink reconnect loop | VALIDATED on an iPhone (browse, verify, createListener) |
-| TLS-PSK client (BC, TLS_PSK_WITH_AES_256_CBC_SHA384 then AES_128_CBC_SHA) | IMPLEMENTED (no live device) |
-| CDTunnel framing + handshake parse | IMPLEMENTED |
+| TLS-PSK client (BC, TLS_PSK_WITH_AES_256_CBC_SHA384 then AES_128_CBC_SHA) | VALIDATED on an iPhone |
+| CDTunnel framing + handshake parse | VALIDATED on an iPhone |
 | Tunnel IPv6 helpers / length-prefixed packets | IMPLEMENTED |
 | Userspace TCP client (SYN/ACK, seq, checksum, stream) | IMPLEMENTED |
 | RSD Handshake parse + RsdClient | IMPLEMENTED |
@@ -52,6 +52,7 @@ LiveContainer already speak. Trailing slashes are optional.
 | `GET /`, `GET /status` | server state as JSON |
 | `GET /ver/`, `GET /version` | version |
 | `GET /re/` | answers, but nothing is cached to refresh |
+| `GET /diag` | plain text trace of the last few hundred tunnel events |
 | `GET /<udid>/<bundle id>/` | enable JIT; what SideStore calls |
 | `GET /<bundle id>/` | enable JIT on the only paired device |
 | `GET /<udid>/` | 501, listing installed apps is NOT IMPLEMENTED |
@@ -61,8 +62,8 @@ A launch answers 503 with the stage that could not complete unless JIT was reall
 
 ## Not validated on hardware
 
-- TLS-PSK and CDTunnel handshake against a real listener
-- Userspace TCP across a real tunnel
+- Userspace TCP against the real tunnel: the device does not answer the SYN to the RSD port
+  (under investigation, see /diag)
 - Live RSD / DVT reply parsing. The PID comes from decoding the keyed archive in the DTX
   reply, not from guessing, but no real reply has ever been decoded.
 - Actual JIT grant via debugproxy
@@ -77,5 +78,9 @@ An iPhone running iOS 27, paired wirelessly, on the same Wi-Fi as an Android hos
 
 The listener turned out to be short lived. Requesting a port and keeping it for later gave
 ECONNREFUSED on connect, so the tunnel data plane is now connected the instant the port is
-issued and held open. Whether the TLS-PSK and CDTunnel handshake succeed against a real
-listener is the next unknown.
+issued and held open. With that fixed, the TLS-PSK handshake and the CDTunnel handshake both succeeded, and the
+tunnel reports the negotiated addresses and RSD port.
+
+The userspace TCP layer then failed: the SYN to the RSD port got no reply within the timeout.
+The SYN is now retransmitted, reads no longer block for the whole timeout, and every packet
+on the tunnel is recorded and served at `/diag` so the cause can be seen rather than guessed.

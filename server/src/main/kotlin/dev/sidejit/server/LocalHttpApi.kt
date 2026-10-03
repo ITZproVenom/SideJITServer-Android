@@ -27,6 +27,7 @@ class LocalHttpApi(
     },
     private val launchHandler: (String) -> JitEngine.Result = { JitEngine.enable(it) },
     private val deviceProvider: () -> List<DeviceSummary> = { emptyList() },
+    private val diagnosticsProvider: () -> List<String> = { emptyList() },
 ) {
     private val running = AtomicBoolean(false)
     private var server: ServerSocket? = null
@@ -101,11 +102,23 @@ class LocalHttpApi(
                     """{"ok":true,"refreshed":false,"note":"the server rediscovers the device continuously"}""",
                     JSON,
                 )
+            pathNorm == "/diag" || pathNorm == "/diagnostics" -> diagnostics()
             pathNorm == "/launch" || pathNorm == "/launch_app" -> launch(bundleFromQuery(query))
             segments.size == 1 -> single(segments[0])
             segments.size == 2 -> pair(segments[0], segments[1])
             else -> Triple("404 Not Found", error("unknown path", pathNorm), JSON)
         }
+    }
+
+    /** What happened on the tunnel, as plain text so it can be read in a browser. */
+    private fun diagnostics(): Triple<String, String, String> {
+        val lines = diagnosticsProvider()
+        val body = if (lines.isEmpty()) {
+            "nothing recorded yet. Open a tunnel and try a launch, then reload this page.\n"
+        } else {
+            lines.joinToString("\n", postfix = "\n")
+        }
+        return Triple("200 OK", body, "text/plain; charset=utf-8")
     }
 
     /** `/<bundle id>/` enables JIT; `/<udid>/` would list apps, which is not implemented. */

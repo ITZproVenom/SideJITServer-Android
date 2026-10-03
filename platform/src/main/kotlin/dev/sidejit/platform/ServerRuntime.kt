@@ -5,6 +5,7 @@ import dev.sidejit.core.logging.Log
 import dev.sidejit.core.logging.LogTag
 import dev.sidejit.core.logging.describe
 import dev.sidejit.core.mdns.MdnsResponder
+import dev.sidejit.coredevice.TunnelDiagnostics
 import dev.sidejit.core.mdns.ServiceRegistration
 import dev.sidejit.core.net.Interfaces
 import dev.sidejit.jit.JitEngine
@@ -248,6 +249,7 @@ class ServerRuntime private constructor(private val context: Context) {
                     port = p,
                     statusProvider = { buildStatusJson() },
                     launchHandler = { bundleId -> handleLaunch(bundleId) },
+                    diagnosticsProvider = { TunnelDiagnostics.snapshot() },
                     deviceProvider = {
                         pairingStore?.all().orEmpty().map { record ->
                             DeviceSummary(record.peer.udid, record.peer.name)
@@ -262,7 +264,7 @@ class ServerRuntime private constructor(private val context: Context) {
                         api = Stage(
                             "Local HTTP API",
                             StageStatus.READY,
-                            "http://0.0.0.0:$bound  (SideStore: ANDROID_IP:$bound)",
+                            "http://0.0.0.0:$bound  (SideStore: ANDROID_IP:$bound, diagnostics at /diag)",
                         ),
                     )
                 }
