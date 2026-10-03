@@ -35,9 +35,9 @@ step that could not complete without a live device.
 | Userspace TCP client (SYN/ACK, seq, checksum, stream) | IMPLEMENTED |
 | RSD Handshake parse + RsdClient | IMPLEMENTED |
 | HTTP/2 frame codec (RemoteXPC transport) | IMPLEMENTED |
-| NSKeyedArchive encoder (bplist00, DVT method calls) | IMPLEMENTED |
+| NSKeyedArchive encoder and binary plist decoder (DVT replies) | IMPLEMENTED |
+| DTX framing, channel request, method invocation, PID decode | IMPLEMENTED (no live device) |
 | ProcessControl launch archive + JSON | IMPLEMENTED |
-| DvtClient (preface + archive send + best-effort PID scrape) | IMPLEMENTED |
 | GDB remote JIT sequence | IMPLEMENTED |
 | Local HTTP API (/status, /launch, /re) | IMPLEMENTED (started by ServerRuntime on :8080) |
 | JIT orchestration | IMPLEMENTED (fails without live device) |
@@ -49,7 +49,8 @@ step that could not complete without a live device.
 - createListener on a host initiated connection
 - createListener + TLS-PSK to a real listener port
 - Userspace TCP across a real tunnel
-- Live RSD / DVT reply parsing (heuristic PID scrape only; unvalidated)
+- Live RSD / DVT reply parsing. The PID comes from decoding the keyed archive in the DTX
+  reply, not from guessing, but no real reply has ever been decoded.
 - Actual JIT grant via debugproxy
 
 ## Physical validation

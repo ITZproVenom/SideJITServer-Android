@@ -26,6 +26,7 @@ class DeviceLink(
     private val onLost: (String) -> Unit = {},
 ) {
     private val running = AtomicBoolean(false)
+    private val gate = java.lang.Object()
     private var thread: Thread? = null
 
     @Volatile
@@ -43,9 +44,15 @@ class DeviceLink(
         }
     }
 
+    /** Wakes the loop early, for instance right after a device finishes pair setup. */
+    fun nudge() {
+        synchronized(gate) { gate.notifyAll() }
+    }
+
     @Synchronized
     fun stop() {
         if (!running.compareAndSet(true, false)) return
+        nudge()
         thread?.interrupt()
         runCatching { connection?.close() }
         connection = null
@@ -97,14 +104,16 @@ class DeviceLink(
         }
     }
 
-    /** Returns false when the link was asked to stop while waiting. */
+    /** Waits up to [millis], or until nudged. Returns false when the link was asked to stop. */
     private fun sleep(millis: Long): Boolean {
-        return try {
-            Thread.sleep(millis)
-            running.get()
-        } catch (_: InterruptedException) {
-            false
+        synchronized(gate) {
+            try {
+                gate.wait(millis)
+            } catch (_: InterruptedException) {
+                return false
+            }
         }
+        return running.get()
     }
 
     companion object {

@@ -70,6 +70,8 @@ class ServerRuntime private constructor(private val context: Context) {
         pairing.onSetupCode = { code -> _state.update { it.copy(setupCode = code) } }
         pairing.onPaired = { record, peerHost ->
             lastPeerHost.set(peerHost)
+            // A fresh pairing means the device is right there; do not wait out the retry delay.
+            link?.nudge()
             _state.update {
                 it.copy(
                     device = Stage("Paired iOS device", StageStatus.READY, "${record.peer.name} @ $peerHost"),

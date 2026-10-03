@@ -24,15 +24,6 @@ object ChaChaPoly {
         return nonce
     }
 
-    /** The tunnel numbers its nonces; the counter is little endian in the trailing eight bytes. */
-    fun nonce(counter: Long): ByteArray {
-        val nonce = ByteArray(NONCE_BYTES)
-        for (index in 0 until 8) {
-            nonce[4 + index] = ((counter ushr (8 * index)) and 0xFF).toByte()
-        }
-        return nonce
-    }
-
     /** RPPairing control-channel nonce: [u64 sequence number LE][four zero bytes]. */
     fun rppairingNonce(sequenceNumber: Long): ByteArray {
         val nonce = ByteArray(NONCE_BYTES)
