@@ -11,3 +11,8 @@ captures/
 *.keystore
 !debug.keystore
 .kotlin/
+
+ios/SideJITControl.xcodeproj/
+ios/build/
+ios/Payload/
+ios/*.ipa
