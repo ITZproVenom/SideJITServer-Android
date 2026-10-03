@@ -3,6 +3,12 @@
 Builds are cut by CI from `main` and published as `build-<number>`. Entries below record
 what changed and, where it matters, what a real iPhone proved or disproved.
 
+## Unreleased
+
+- Advertise the pointer and text records with a two minute lifetime instead of 75 minutes. A
+  reinstall gives the server a new identity, and an uninstalled app cannot send a goodbye, so
+  dead "pair with this host" entries used to sit in the iPhone's list for over an hour.
+
 ## build-80
 
 - Record every packet that crosses the tunnel, with addresses, ports and flags, including the

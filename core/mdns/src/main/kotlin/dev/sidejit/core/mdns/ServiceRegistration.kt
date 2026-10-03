@@ -38,6 +38,17 @@ data class ServiceRegistration(
     companion object {
         /** The meta query a browser uses to list every service type on the link. */
         val SERVICE_ENUMERATION: DnsName = DnsName("_services._dns-sd._udp.local")
+
+        /**
+         * How long a browser may keep our pointer and text records.
+         *
+         * The usual value is 4500 seconds, which assumes a service that outlives its
+         * announcement. This one does not: the app can be stopped, reinstalled with a new
+         * identity, or killed without ever sending a goodbye, and every one of those leaves a
+         * dead "pair with this host" entry sitting in the iPhone's list for over an hour. Two
+         * minutes costs a little multicast traffic on one link and makes the list honest.
+         */
+        const val SHORT_TTL: Long = 120
     }
 }
 
@@ -52,10 +63,10 @@ class ServiceRecords(
     /** Every record we would announce unprompted. */
     fun announcement(): List<DnsRecord> = services.flatMap { service ->
         buildList {
-            add(DnsRecord.Pointer(ServiceRegistration.SERVICE_ENUMERATION, service.typeName))
-            add(DnsRecord.Pointer(service.typeName, service.fullName))
+            add(DnsRecord.Pointer(ServiceRegistration.SERVICE_ENUMERATION, service.typeName, ServiceRegistration.SHORT_TTL))
+            add(DnsRecord.Pointer(service.typeName, service.fullName, ServiceRegistration.SHORT_TTL))
             add(DnsRecord.Service(service.fullName, service.hostDnsName, service.port))
-            add(DnsRecord.Text(service.fullName, service.txtRecords))
+            add(DnsRecord.Text(service.fullName, service.txtRecords, ServiceRegistration.SHORT_TTL))
             addAll(addressRecords(service))
         }
     }
@@ -83,16 +94,18 @@ class ServiceRecords(
         val additional = ArrayList<DnsRecord>()
         for (service in services) {
             val srv = DnsRecord.Service(service.fullName, service.hostDnsName, service.port)
-            val txt = DnsRecord.Text(service.fullName, service.txtRecords)
+            val txt = DnsRecord.Text(service.fullName, service.txtRecords, ServiceRegistration.SHORT_TTL)
             val addresses = addressRecords(service)
             val wants = { type: Int -> question.type == type || question.type == DnsType.ANY }
 
             if (question.name == ServiceRegistration.SERVICE_ENUMERATION && wants(DnsType.PTR)) {
-                answers.add(DnsRecord.Pointer(ServiceRegistration.SERVICE_ENUMERATION, service.typeName))
+                answers.add(
+                    DnsRecord.Pointer(ServiceRegistration.SERVICE_ENUMERATION, service.typeName, ServiceRegistration.SHORT_TTL),
+                )
                 continue
             }
             if (question.name == service.typeName && wants(DnsType.PTR)) {
-                answers.add(DnsRecord.Pointer(service.typeName, service.fullName))
+                answers.add(DnsRecord.Pointer(service.typeName, service.fullName, ServiceRegistration.SHORT_TTL))
                 additional.add(srv)
                 additional.add(txt)
                 additional.addAll(addresses)
