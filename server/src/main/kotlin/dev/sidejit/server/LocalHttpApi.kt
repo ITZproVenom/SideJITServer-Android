@@ -141,21 +141,17 @@ class LocalHttpApi(
         return launch(segment)
     }
 
-    /** `/<udid>/<bundle id>/` is the route SideStore uses to enable JIT. */
-    private fun pair(first: String, second: String): Triple<String, String, String> {
-        val devices = deviceProvider()
-        if (devices.isNotEmpty() && devices.none { it.udid.equals(first, ignoreCase = true) }) {
-            return Triple(
-                "404 Not Found",
-                error(
-                    "no paired device has the identifier $first (paired: " +
-                        devices.joinToString { it.udid } + ")",
-                ),
-                JSON,
-            )
-        }
-        return launch(second)
-    }
+    /**
+     * `/<udid>/<bundle id>/` is the route SideStore uses to enable JIT.
+     *
+     * The leading segment is accepted but not used to pick a device. Clients derive that
+     * identifier from their own provisioning profile, which is a different identifier space
+     * from the one remote pairing reports, so comparing the two rejects legitimate requests.
+     * This server also only ever has one paired device, so there is nothing to disambiguate.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun pair(deviceIdentifier: String, bundleId: String): Triple<String, String, String> =
+        launch(bundleId)
 
     private fun bundleFromQuery(query: String): String =
         sequenceOf("bundleId", "bundle_id", "bundle")

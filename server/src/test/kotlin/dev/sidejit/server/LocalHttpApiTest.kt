@@ -105,11 +105,12 @@ class LocalHttpApiTest {
     }
 
     @Test
-    fun `a request for an unknown device is refused rather than launched`() {
+    fun `an identifier the server does not recognise is still served`() {
+        grantPid = 11
         synchronized(devices) { devices.add(DeviceSummary("00008120-ABC", "Bestin's iPhone")) }
         val response = request("/somebody-elses-phone/com.example.app/")
-        assertEquals(404, response.status)
-        assertTrue(synchronized(launched) { launched.isEmpty() })
+        assertEquals(200, response.status)
+        assertEquals(listOf("com.example.app"), synchronized(launched) { launched.toList() })
     }
 
     @Test

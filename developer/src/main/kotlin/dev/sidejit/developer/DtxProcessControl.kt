@@ -21,15 +21,9 @@ class DtxProcessControl(
         val selector = NsKeyedArchive.encode(NsKeyedArchive.text(
             "launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:"
         ))
-        val arguments = NsKeyedArchive.dict(
-            "devicePath" to NsKeyedArchive.text("/private/"),
-            "bundleIdentifier" to NsKeyedArchive.text(bundleId),
-            "environment" to NsKeyedArchive.dict(),
-            "arguments" to NsKeyedArchive.array(),
-            "options" to NsKeyedArchive.dict(
-                "StartSuspendedKey" to NsKeyedArchive.bool(true),
-                "KillExisting" to NsKeyedArchive.bool(true),
-            ),
+        val options = NsKeyedArchive.dict(
+            "StartSuspendedKey" to NsKeyedArchive.bool(true),
+            "KillExisting" to NsKeyedArchive.bool(true),
         )
         val reply = methodCall(
             serviceChannel,
@@ -41,7 +35,7 @@ class DtxProcessControl(
                     "NSUnbufferedIO" to NsKeyedArchive.text("YES"),
                 ))),
                 PrimitiveArg.Bytes(NsKeyedArchive.encode(NsKeyedArchive.array())),
-                PrimitiveArg.Bytes(NsKeyedArchive.encode(arguments)),
+                PrimitiveArg.Bytes(NsKeyedArchive.encode(options)),
             ),
         )
         if (reply.messageType == MSG_ERROR) {
